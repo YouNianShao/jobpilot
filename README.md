@@ -19,7 +19,7 @@
 
 ```bash
 # 1. 克隆并安装依赖
-git clone git@github.com:YouNianShao/jobpilot.git
+git clone https://github.com/YouNianShao/jobpilot.git
 cd jobpilot
 python -m venv .venv
 .venv\Scripts\activate

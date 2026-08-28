@@ -121,7 +121,7 @@ git revert <提交号>           # 生成一个"反向提交"来撤销 —— �
 ## 6. 换电脑 / 重装系统后恢复
 
 ```bash
-git clone git@github.com:YouNianShao/jobpilot.git
+git clone https://github.com/YouNianShao/jobpilot.git
 cd jobpilot
 python -m venv .venv
 .venv\Scripts\activate
@@ -129,22 +129,32 @@ pip install -e .
 # 最后：自己创建 config.yaml（它本来就不在仓库里，需按 config.example.yaml 填）
 ```
 
+新机器上首次推送要重新登录 GitHub：
+
+```bash
+gh auth login --hostname github.com --web     # 设备码授权：把终端给的码填进网页
+git push
+```
+
 ---
 
 ## 7. 网络问题（国内特有）
 
-SSH 通道和授权都已配好，**正常直接 `git push` 就行**。
+当前走的是 **HTTPS + gh CLI 凭据**（不用 SSH key，也不用手输密码），已配好，**正常 `git push` 即可**。
 
-如果 push 卡住或超时（网络被干扰）：
+推送卡住 / 超时时：
 
-1. 换网络环境 / 开加速器再重试
-2. 提示 `Host key verification failed` 时，用这条：
+1. 换网络环境或开加速器，重试一次
+2. 提示要输用户名密码 → gh 凭据失效了，重新 `gh auth login` 再推
+3. 推不上去也别慌：**commit 是纯本地操作，不受网络影响**。先存好本地存档，有网再 push
+
+验证推送是否真的成功（别只看命令没报错）：
 
 ```bash
-GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git push
+gh api repos/YouNianShao/jobpilot/commits --jq "length"    # 返回远端提交数
 ```
 
-3. 实在推不上去也没关系：commit 是本地操作，不受网络影响。先把代码存好档，有网了再 push。
+> ⚠️ 踩过的坑：SSH 方式（`git@github.com:...`）在这个网络环境下会报 `Host key verification failed`，而且**静默失败不报错**——看着像推成功了，实际远端是空的。所以本项目固定用 HTTPS 地址。
 
 ---
 
