@@ -96,6 +96,13 @@
                  color:#fff; text-decoration:none; font-size:12px; white-space:nowrap; }
   a.apply-link:hover { background:var(--primary-d); }
   td.op-cell { white-space:nowrap; }
+  /* 工作台：平台切换按钮组 */
+  .plat-switch { display:inline-flex; background:#f1f5f9; border:1px solid var(--line); border-radius:8px; padding:2px; }
+  .plat-switch .plat-btn { background:transparent; color:var(--muted); border:0; border-radius:6px;
+                           padding:6px 13px; font-size:13px; cursor:pointer; }
+  .plat-switch .plat-btn:hover { background:#e2e8f0; color:var(--text); }
+  .plat-switch .plat-btn.active { background:var(--primary); color:#fff; font-weight:600; }
+  .plat-switch .plat-btn.active:hover { background:var(--primary-d); }
 </style>
 </head>
 <body>
@@ -139,7 +146,10 @@
             <span id="collectOnlyHint" class="muted" style="display:none;color:#f59e0b">⚠ 智联招聘仅支持采集 —— 请到「岗位池」点「去投递 ↗」手动投递</span>
             <span id="state" class="muted"></span>
           </div>
-          <span class="muted">当前平台：<b id="curPlatform">前程无忧</b></span>
+          <div class="row">
+            <span class="muted">当前平台</span>
+            <div id="platSwitch" class="plat-switch"></div>
+          </div>
         </div>
       </div>
 
@@ -430,7 +440,7 @@ async function saveConfig() {
 
 async function run(mode) {
   if (mode === 'apply' && $('#platform').value === 'zhaopin') {
-    alert('智联招聘仅支持采集，自动投递被平台反爬封锁。\n请切换到「岗位池」选智联，点每行的「去投递 ↗」打开智联岗位页手动申请。');
+    alert('智联招聘仅支持采集，自动投递被平台反爬封锁。\n已切到「岗位池」：点每行的「去投递 ↗」打开智联岗位页手动申请。');
     switchTab('pool');
     return;
   }
@@ -440,14 +450,36 @@ async function run(mode) {
   poll();
 }
 
+// 工作台平台切换按钮组（按钮项由岗位池下拉的选项生成，保持单一数据源）
+function buildPlatformSwitch() {
+  const wrap = $('#platSwitch');
+  wrap.innerHTML = '';
+  Array.from($('#platform').options).forEach(o => {
+    const b = document.createElement('button');
+    b.className = 'plat-btn';
+    b.dataset.pf = o.value;
+    b.textContent = o.textContent;
+    b.onclick = () => setPlatform(o.value);
+    wrap.appendChild(b);
+  });
+}
+
+// 统一平台切换入口：两处控件同步 + 刷新依赖数据
+function setPlatform(pf) {
+  $('#platform').value = pf;
+  updateCollectOnlyHint();
+  loadConfig();
+  loadJobs();
+}
+
 // 采集-only 平台（如智联）：切换提示 + 禁用「投递」按钮
 function updateCollectOnlyHint() {
-  const isCO = $('#platform').value === 'zhaopin';
+  const pf = $('#platform').value;
+  const isCO = pf === 'zhaopin';
   $('#collectOnlyHint').style.display = isCO ? 'inline' : 'none';
   $('#btnApply').disabled = isCO;
   $('#btnApply').title = isCO ? '智联招聘仅支持采集，投递请手动' : '';
-  const label = $('#platform').selectedOptions[0] ? $('#platform').selectedOptions[0].textContent : '';
-  $('#curPlatform').textContent = label;
+  document.querySelectorAll('#platSwitch .plat-btn').forEach(b => b.classList.toggle('active', b.dataset.pf === pf));
   const tip = $('#poolTip');
   if (tip) tip.classList.toggle('show', isCO);
 }
@@ -573,7 +605,7 @@ $('#btnPause').onclick = async () => {
 };
 $('#btnSave').onclick = saveConfig;
 $('#filter').onchange = loadJobs;
-$('#platform').onchange = () => { loadConfig(); loadJobs(); updateCollectOnlyHint(); };
+$('#platform').onchange = () => setPlatform($('#platform').value);
 $('#btnDismissBlocked').onclick = () => {
   applyBlockedDismissed = true;
   $('#applyBlockedAlert').classList.remove('show');
@@ -604,7 +636,8 @@ document.querySelectorAll('.nav-item').forEach(b => {
 });
 
 (async () => {
-  await refreshHealth(); await loadConfig(); await loadJobs();
+  await refreshHealth(); buildPlatformSwitch();
+  await loadConfig(); await loadJobs();
   updateCollectOnlyHint(); await poll();
   setInterval(refreshHealth, 8000);
 })();
