@@ -19,7 +19,7 @@
 
 ```bash
 # 1. 克隆并安装依赖
-git clone https://github.com/<your-name>/jobpilot.git
+git clone git@github.com:YouNianShao/jobpilot.git
 cd jobpilot
 python -m venv .venv
 .venv\Scripts\activate
@@ -63,6 +63,10 @@ src/jobpilot/
 ├── progress.py         # 运行状态持久化（run_status.json）
 └── web/                # HTTP 服务 + 单文件仪表盘（dashboard.html）
 ```
+
+## 开发与维护
+
+Git 日常操作（提交 / 推送 / 迭代 / 回滚 / 安全红线）见 [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)。
 
 ## 免责声明
 
