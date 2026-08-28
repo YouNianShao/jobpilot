@@ -1,0 +1,9 @@
+[project]
+name = "jobpilot"
+version = "0.1.0"
+description = "JobPilot - 多平台自动岗位投递工具"
+requires-python = ">=3.10"
+dependencies = ["httpx", "pyyaml", "pywebview"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

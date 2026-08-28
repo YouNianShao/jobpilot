@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# 本地运行数据（含个人登录态与数据库，勿提交）
+data/
+chrome-profile/
+
+# 日志
+*.log
+
+# 本地配置（含真实 API Key）——发布模板见 config.example.yaml
+config.yaml

@@ -1,0 +1,28 @@
+browser:
+  proxy_url: http://127.0.0.1:3457
+  chrome_port: 9223
+
+ai:
+  provider: openai_compatible
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  api_key: sk-xxxx
+
+platforms:
+  51job:
+    enabled: true
+    cities: [上海]
+    keywords: [AI, 数据分析, 产品]
+    max_pages: 3
+    apply: true
+
+throttle:
+  daily_limit: 30
+  interval_min: 60
+  interval_max: 180
+
+scoring:
+  threshold: 60
+
+profile:
+  resume_path: E:/JobPilot/data/resume.md
