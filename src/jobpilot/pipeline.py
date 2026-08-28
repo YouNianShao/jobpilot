@@ -64,6 +64,8 @@ def run_pipeline(cfg: dict[str, Any], platform: str = "51job", mode: str = "full
                     fail_count += 1
                     if not fail_reason:
                         fail_reason = str(reason)
+                    # 评分失败回退 new 状态，下次运行可重新评分（否则失败岗位永久滞留 scored）
+                    set_status(conn, job["id"], "new")
             conn.close()
             # 全部评分失败 → 通常是 AI Key 失效/未配置，标记供前端醒目提示
             if total > 0 and fail_count == total:
