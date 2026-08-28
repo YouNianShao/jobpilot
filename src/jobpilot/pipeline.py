@@ -6,6 +6,7 @@ from typing import Any
 
 from jobpilot.ai.scorer import load_resume, score_job
 from jobpilot.browser import Browser
+from jobpilot.prefilter import prefilter_job
 from jobpilot.db import (
     count_applied_today,
     get_conn,
@@ -49,11 +50,20 @@ def run_pipeline(cfg: dict[str, Any], platform: str = "51job", mode: str = "full
             total = len(pend)
             prog_phase("score", total, 0, "评分中…")
             count = 0
+            prefiltered = 0
             fail_count = 0
             fail_reason = ""
+            profile_cfg = cfg.get("profile", {}) or {}
             for i, job in enumerate(pend, 1):
                 yield_point()
                 prog_job(i, total, f"{job['title']}@{job['company']}")
+                # 硬规则预筛（实习/黑名单/薪资），命中则跳过 AI 评分
+                rejected, preason = prefilter_job(dict(job), profile_cfg)
+                if rejected:
+                    set_status(conn, job["id"], "rejected")
+                    log_history(conn, job["id"], "prefilter_rejected", preason)
+                    prefiltered += 1
+                    continue
                 score, reason = score_job(cfg, dict(job), resume)
                 set_score(conn, job["id"], score, reason)
                 if score >= threshold:
@@ -71,6 +81,7 @@ def run_pipeline(cfg: dict[str, Any], platform: str = "51job", mode: str = "full
             if total > 0 and fail_count == total:
                 prog_score_failed(True, fail_reason)
             result["score"] = count
+            result["prefiltered"] = prefiltered
 
         if mode in ("apply", "full") and not getattr(adapter, "collect_only", False):
             throttle = cfg.get("throttle", {}) or {}

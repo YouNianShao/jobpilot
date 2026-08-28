@@ -24,6 +24,20 @@ DEFAULTS: dict[str, Any] = {
             "max_pages": 3,
             "apply": True,
         },
+        "liepin": {
+            "enabled": True,
+            "cities": ["上海"],
+            "keywords": ["AI", "数据分析"],
+            "max_pages": 3,
+            "apply": True,
+        },
+        "zhaopin": {
+            "enabled": True,
+            "cities": ["上海"],
+            "keywords": ["AI", "数据分析"],
+            "max_pages": 3,
+            "apply": False,
+        },
     },
     "throttle": {
         "daily_limit": 30,
@@ -31,7 +45,13 @@ DEFAULTS: dict[str, Any] = {
         "interval_max": 180,
     },
     "scoring": {"threshold": 60},
-    "profile": {"resume_path": ""},
+    "profile": {
+        "resume_path": "",
+        "salary_min": 0,       # K/月，硬性下限，低于则预筛剔除
+        "salary_max": 0,       # K/月，硬性上限，高于则预筛剔除（0=不限）
+        "allow_internship": False,
+        "deal_breakers": [],   # 标题黑名单关键词
+    },
     "monitor": {
         "enabled": True,
         "auto": False,            # 定时后台运行

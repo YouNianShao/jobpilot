@@ -103,6 +103,10 @@
   .plat-switch .plat-btn:hover { background:#e2e8f0; color:var(--text); }
   .plat-switch .plat-btn.active { background:var(--primary); color:#fff; font-weight:600; }
   .plat-switch .plat-btn.active:hover { background:var(--primary-d); }
+  /* 配置 tab：复选框行 */
+  .switch-line { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--text); margin-top:6px; }
+  .switch-line input { width:15px; height:15px; accent-color:var(--primary); }
+  textarea { font-family:inherit; }
 </style>
 </head>
 <body>
@@ -266,18 +270,67 @@
     <!-- ===== 配置 ===== -->
     <section id="tab-config" class="tab-panel">
       <h2 class="tab-head">配置</h2>
+      <p class="muted" style="margin:-6px 0 12px">配置按当前「平台」生效（工作台 / 岗位池顶部可切换）。保存后写回 config.yaml。</p>
+
       <div class="card">
-        <h3 style="margin:0 0 10px">平台与评分配置</h3>
+        <h3 style="margin:0 0 10px">AI 与模型</h3>
         <div class="grid2">
           <label>AI Key (DeepSeek)<br><input id="apiKey" style="width:100%" placeholder="sk-..."></label>
+          <label>模型<br>
+            <select id="model" style="width:100%;padding:7px;border:1px solid var(--line);border-radius:7px;font-size:13px">
+              <option value="deepseek-chat">deepseek-chat</option>
+              <option value="deepseek-reasoner">deepseek-reasoner</option>
+            </select>
+          </label>
           <label>匹配阈值<br><input id="threshold" type="number" value="60" style="width:100%"></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px">简历与硬性过滤</h3>
+        <div class="grid2">
+          <label>简历路径<br><input id="resumePath" style="width:100%" placeholder="C:/.../resume.md"></label>
+          <label>屏蔽实习岗<br><span class="switch-line"><input type="checkbox" id="allowInternship"> 允许投递实习岗</span></label>
+          <label>薪资下限 (K/月)<br><input id="salaryMin" type="number" value="0" style="width:100%"></label>
+          <label>薪资上限 (K/月，0=不限)<br><input id="salaryMax" type="number" value="0" style="width:100%"></label>
+        </div>
+        <label style="display:block;margin-top:10px">黑名单关键词（逗号分隔，标题命中即剔除，不进 AI 评分）<br>
+          <textarea id="dealBreakers" rows="2" style="width:100%;padding:7px;border:1px solid var(--line);border-radius:7px;font-size:13px" placeholder="外包, 996, 驻场"></textarea>
+        </label>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px">当前平台：<b id="cfgPlatformName">前程无忧</b></h3>
+        <div class="grid2">
+          <label>启用此平台<br><span class="switch-line"><input type="checkbox" id="platEnabled"> 在切换器中显示</span></label>
+          <label>采集页数<br><input id="maxPages" type="number" value="3" style="width:100%"></label>
           <label>城市(逗号分隔)<br><input id="cities" style="width:100%" placeholder="上海,北京"></label>
           <label>关键词(逗号分隔)<br><input id="keywords" style="width:100%" placeholder="AI,数据分析"></label>
         </div>
-        <div class="row" style="margin-top:10px">
-          <button id="btnSave">保存配置</button><span id="saveMsg" class="muted"></span>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px">投递节奏（防反爬）</h3>
+        <div class="grid2">
+          <label>每日上限<br><input id="dailyLimit" type="number" value="30" style="width:100%"></label>
+          <label>间隔下限(秒)<br><input id="intervalMin" type="number" value="60" style="width:100%"></label>
+          <label>间隔上限(秒)<br><input id="intervalMax" type="number" value="180" style="width:100%"></label>
         </div>
-        <p class="muted" style="margin:10px 0 0">配置按当前「平台」生效（岗位池页面顶部可切换）。保存后会写回 config.yaml。</p>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px">监测</h3>
+        <div class="grid2">
+          <label>启用监测<br><span class="switch-line"><input type="checkbox" id="monEnabled"> 开启监测</span></label>
+          <label>自动运行<br><span class="switch-line"><input type="checkbox" id="monAuto"> 后台定时监测</span></label>
+          <label>间隔(分钟)<br><input id="monInterval" type="number" value="30" style="width:100%"></label>
+          <label>工作时间窗<br><input id="monHours" style="width:100%" placeholder="09:00-21:00"></label>
+          <label>建议回复<br><span class="switch-line"><input type="checkbox" id="monDraft"> 允许 AI 建议回复</span></label>
+        </div>
+      </div>
+
+      <div class="row" style="margin:14px 0">
+        <button id="btnSave">保存配置</button><span id="saveMsg" class="muted"></span>
       </div>
     </section>
   </main>
@@ -417,25 +470,77 @@ async function updateStats(s) {
 
 async function loadConfig() {
   const c = await api('/api/config');
+  const pf = $('#platform').value;
+  // AI / 模型
   $('#apiKey').value = c.ai?.api_key || '';
+  $('#model').value = c.ai?.model || 'deepseek-chat';
   $('#threshold').value = c.scoring?.threshold ?? 60;
-  const p = c.platforms?.[$('#platform').value] || {};
-  $('#cities').value = (p.cities||[]).join(',');
-  $('#keywords').value = (p.keywords||[]).join(',');
+  // 简历与硬性过滤
+  const prof = c.profile || {};
+  $('#resumePath').value = prof.resume_path || '';
+  $('#allowInternship').checked = !!prof.allow_internship;
+  $('#salaryMin').value = prof.salary_min ?? 0;
+  $('#salaryMax').value = prof.salary_max ?? 0;
+  $('#dealBreakers').value = (prof.deal_breakers || []).join(',');
+  // 当前平台
+  const p = c.platforms?.[pf] || {};
+  $('#cfgPlatformName').textContent = ($('#platform').selectedOptions[0] || {}).textContent || pf;
+  $('#platEnabled').checked = p.enabled !== false;
+  $('#maxPages').value = p.max_pages ?? 3;
+  $('#cities').value = (p.cities || []).join(',');
+  $('#keywords').value = (p.keywords || []).join(',');
+  // 投递节奏
+  const th = c.throttle || {};
+  $('#dailyLimit').value = th.daily_limit ?? 30;
+  $('#intervalMin').value = th.interval_min ?? 60;
+  $('#intervalMax').value = th.interval_max ?? 180;
+  // 监测
+  const mon = c.monitor || {};
+  $('#monEnabled').checked = !!mon.enabled;
+  $('#monAuto').checked = !!mon.auto;
+  $('#monInterval').value = mon.interval_minutes ?? 30;
+  $('#monHours').value = mon.working_hours || '09:00-21:00';
+  $('#monDraft').checked = !!mon.draft_reply;
+  // 同步平台启用状态到下拉 + 切换按钮组
+  syncPlatformEnabled(c.platforms || {});
 }
 
 async function saveConfig() {
+  const pf = $('#platform').value;
+  const num = (id, d) => { const v = Number($('#' + id).value); return Number.isFinite(v) ? v : d; };
   const body = {
-    ai: { api_key: $('#apiKey').value.trim() },
-    scoring: { threshold: Number($('#threshold').value) || 60 },
-    platforms: { [$('#platform').value]: {
-      cities: $('#cities').value.split(',').map(s=>s.trim()).filter(Boolean),
-      keywords: $('#keywords').value.split(',').map(s=>s.trim()).filter(Boolean),
-    }}
+    ai: { api_key: $('#apiKey').value.trim(), model: $('#model').value },
+    scoring: { threshold: num('threshold', 60) },
+    profile: {
+      resume_path: $('#resumePath').value.trim(),
+      salary_min: num('salaryMin', 0),
+      salary_max: num('salaryMax', 0),
+      allow_internship: $('#allowInternship').checked,
+      deal_breakers: $('#dealBreakers').value.split(',').map(s => s.trim()).filter(Boolean),
+    },
+    throttle: {
+      daily_limit: num('dailyLimit', 30),
+      interval_min: num('intervalMin', 60),
+      interval_max: num('intervalMax', 180),
+    },
+    monitor: {
+      enabled: $('#monEnabled').checked,
+      auto: $('#monAuto').checked,
+      interval_minutes: num('monInterval', 30),
+      working_hours: $('#monHours').value.trim() || '09:00-21:00',
+      draft_reply: $('#monDraft').checked,
+    },
+    platforms: { [pf]: {
+      enabled: $('#platEnabled').checked,
+      max_pages: num('maxPages', 3),
+      cities: $('#cities').value.split(',').map(s => s.trim()).filter(Boolean),
+      keywords: $('#keywords').value.split(',').map(s => s.trim()).filter(Boolean),
+    } },
   };
   await api('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   $('#saveMsg').textContent = '已保存 ✓';
-  setTimeout(()=>$('#saveMsg').textContent='', 2000);
+  setTimeout(() => { if ($('#saveMsg').textContent === '已保存 ✓') $('#saveMsg').textContent = ''; }, 2000);
+  loadConfig();  // 重新拉取，刷新平台启用状态到切换器
 }
 
 async function run(mode) {
@@ -450,13 +555,15 @@ async function run(mode) {
   poll();
 }
 
-// 工作台平台切换按钮组（按钮项由岗位池下拉的选项生成，保持单一数据源）
+// 工作台平台切换按钮组（按钮项由岗位池下拉的选项生成，保持单一数据源；禁用平台不显示）
 function buildPlatformSwitch() {
   const wrap = $('#platSwitch');
   wrap.innerHTML = '';
+  const cur = $('#platform').value;
   Array.from($('#platform').options).forEach(o => {
+    if (o.disabled) return;
     const b = document.createElement('button');
-    b.className = 'plat-btn';
+    b.className = 'plat-btn' + (o.value === cur ? ' active' : '');
     b.dataset.pf = o.value;
     b.textContent = o.textContent;
     b.onclick = () => setPlatform(o.value);
@@ -464,9 +571,24 @@ function buildPlatformSwitch() {
   });
 }
 
+// 依据各平台 enabled 标记：禁用下拉选项 + 重建切换按钮组
+function syncPlatformEnabled(platforms) {
+  Array.from($('#platform').options).forEach(o => {
+    o.disabled = platforms[o.value]?.enabled === false;
+  });
+  buildPlatformSwitch();
+}
+
 // 统一平台切换入口：两处控件同步 + 刷新依赖数据
 function setPlatform(pf) {
-  $('#platform').value = pf;
+  const sel = $('#platform');
+  // 目标被禁用则跳到第一个启用平台
+  const ok = Array.from(sel.options).find(o => o.value === pf && !o.disabled);
+  if (!ok) {
+    const first = Array.from(sel.options).find(o => !o.disabled);
+    if (first) pf = first.value;
+  }
+  sel.value = pf;
   updateCollectOnlyHint();
   loadConfig();
   loadJobs();

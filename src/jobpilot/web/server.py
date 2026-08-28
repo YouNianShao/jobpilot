@@ -201,7 +201,14 @@ class Handler(BaseHTTPRequestHandler):
             masked = dict(ai)
             if masked.get("api_key"):
                 masked["api_key"] = masked["api_key"][:4] + "****" + masked["api_key"][-4:]
-            self._send(200, {"ai": masked, "platforms": cfg.get("platforms", {}), "scoring": cfg.get("scoring", {})})
+            self._send(200, {
+                "ai": masked,
+                "platforms": cfg.get("platforms", {}),
+                "scoring": cfg.get("scoring", {}),
+                "throttle": cfg.get("throttle", {}),
+                "profile": cfg.get("profile", {}),
+                "monitor": cfg.get("monitor", {}),
+            })
             return
         if path == "/api/browser_health":
             cfg = load_config()
@@ -239,6 +246,12 @@ class Handler(BaseHTTPRequestHandler):
                 cfg["platforms"] = {**cfg.get("platforms", {}), **body["platforms"]}
             if "scoring" in body:
                 cfg["scoring"] = {**cfg.get("scoring", {}), **body["scoring"]}
+            if "throttle" in body:
+                cfg["throttle"] = {**cfg.get("throttle", {}), **body["throttle"]}
+            if "profile" in body:
+                cfg["profile"] = {**cfg.get("profile", {}), **body["profile"]}
+            if "monitor" in body:
+                cfg["monitor"] = {**cfg.get("monitor", {}), **body["monitor"]}
             save_config(cfg, CONFIG_PATH)
             self._send(200, {"ok": True})
             return
