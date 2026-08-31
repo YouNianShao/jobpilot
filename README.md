@@ -2,6 +2,10 @@
 
 多平台自动岗位投递工具。基于真实 Chrome（CDP 桥接）驱动 51job / 猎聘 / 智联招聘，支持岗位采集 → AI 评分 → 自动/手动投递的完整流水线，带 Web 仪表盘。
 
+[![License](https://img.shields.io/github/license/YouNianShao/jobpilot)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
+[![Platforms](https://img.shields.io/badge/platforms-51job%20%7C%20liepin%20%7C%20zhaopin-green)](https://github.com/YouNianShao/jobpilot)
+
 > ⚠️ **风险提示**：本工具仅限个人求职使用。主流招聘平台对自动化操作均有反爬风控（忽略点击 / 详情页 JS 封锁 / 会话级风控打标），自动投递随时可能失效——项目按"采集可用、投递尽量"设计，请以平台内手动投递为兜底，并自行评估账号风险。
 
 ## 功能
@@ -73,3 +77,16 @@ Git 日常操作（提交 / 推送 / 迭代 / 回滚 / 安全红线）见 [GIT_W
 - 自动投递依赖平台页面结构与反爬策略，**可能随时失效**；失效时请切换手动投递。
 - 请遵守目标平台服务条款，控制频率，账号风险自负。
 - 本项目仅用于个人求职场景，请勿用于批量营销或任何商业用途。
+
+## 许可证
+
+本项目采用 [MIT License](./LICENSE)。你可以自由使用、修改、分发（含商业用途），只需保留版权声明。
+
+## 贡献
+
+欢迎 Issue 与 PR！
+
+- **提 Bug / 功能建议**：请使用仓库的 Issue 模板，提交前务必删除日志里的 API Key 等敏感信息。
+- **提交代码**：请遵循 [PULL_REQUEST_TEMPLATE](./.github/PULL_REQUEST_TEMPLATE.md) 检查清单，确保不混入 `config.yaml` / `data/` / `chrome-profile/` / `*.log`。
+
+日常 Git 操作见 [GIT_WORKFLOW.md](./GIT_WORKFLOW.md)。
