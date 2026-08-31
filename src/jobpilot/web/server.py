@@ -241,7 +241,11 @@ class Handler(BaseHTTPRequestHandler):
         if p.path == "/api/config":
             cfg = load_config()
             if "ai" in body:
-                cfg["ai"] = {**cfg.get("ai", {}), **body["ai"]}
+                new_ai = {**cfg.get("ai", {}), **body["ai"]}
+                # 防御：GET 返回的是掩码 key，若前端原样回传则不要覆盖真值
+                if isinstance(new_ai.get("api_key"), str) and "*" in new_ai["api_key"]:
+                    new_ai["api_key"] = cfg.get("ai", {}).get("api_key", "")
+                cfg["ai"] = new_ai
             if "platforms" in body:
                 cfg["platforms"] = {**cfg.get("platforms", {}), **body["platforms"]}
             if "scoring" in body:

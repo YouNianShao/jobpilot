@@ -509,7 +509,8 @@ async function saveConfig() {
   const pf = $('#platform').value;
   const num = (id, d) => { const v = Number($('#' + id).value); return Number.isFinite(v) ? v : d; };
   const body = {
-    ai: { api_key: $('#apiKey').value.trim(), model: $('#model').value },
+    ai: { model: $('#model').value },
+    // 防御：api_key 框显示的是掩码，未改则不发送，避免覆盖真值
     scoring: { threshold: num('threshold', 60) },
     profile: {
       resume_path: $('#resumePath').value.trim(),
@@ -537,7 +538,8 @@ async function saveConfig() {
       keywords: $('#keywords').value.split(',').map(s => s.trim()).filter(Boolean),
     } },
   };
-  await api('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const rawKey = $('#apiKey').value.trim();
+  if (rawKey && !rawKey.includes('*')) body.ai.api_key = rawKey;  // 仅当用户输入了完整 key 才更新  await api('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   $('#saveMsg').textContent = '已保存 ✓';
   setTimeout(() => { if ($('#saveMsg').textContent === '已保存 ✓') $('#saveMsg').textContent = ''; }, 2000);
   loadConfig();  // 重新拉取，刷新平台启用状态到切换器
