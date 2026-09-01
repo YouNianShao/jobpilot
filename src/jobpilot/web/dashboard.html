@@ -275,15 +275,26 @@
       <div class="card">
         <h3 style="margin:0 0 10px">AI 与模型</h3>
         <div class="grid2">
-          <label>AI Key (DeepSeek)<br><input id="apiKey" style="width:100%" placeholder="sk-..."></label>
-          <label>模型<br>
-            <select id="model" style="width:100%;padding:7px;border:1px solid var(--line);border-radius:7px;font-size:13px">
-              <option value="deepseek-chat">deepseek-chat</option>
-              <option value="deepseek-reasoner">deepseek-reasoner</option>
+          <label>服务商<br>
+            <select id="aiProvider" style="width:100%;padding:7px;border:1px solid var(--line);border-radius:7px;font-size:13px">
+              <option value="deepseek">DeepSeek</option>
+              <option value="moonshot">Moonshot / Kimi</option>
+              <option value="qwen">通义千问（阿里云百炼）</option>
+              <option value="zhipu">智谱 GLM</option>
+              <option value="openai">OpenAI</option>
+              <option value="ollama">本地 Ollama</option>
+              <option value="custom">自定义</option>
             </select>
+          </label>
+          <label>接口地址 (base_url)<br><input id="baseUrl" style="width:100%" placeholder="https://api.deepseek.com/v1"></label>
+          <label>AI Key<br><input id="apiKey" style="width:100%" placeholder="sk-..."></label>
+          <label>模型（可手输）<br>
+            <input id="model" list="modelList" style="width:100%" placeholder="选择或输入模型名">
+            <datalist id="modelList"></datalist>
           </label>
           <label>匹配阈值<br><input id="threshold" type="number" value="60" style="width:100%"></label>
         </div>
+        <p class="muted" style="margin:10px 0 0;font-size:12px">支持任何 OpenAI 兼容接口：选服务商自动填地址与默认模型，或选「自定义」手填。模型名可直接输入，具体名称以各家官方文档为准。</p>
       </div>
 
       <div class="card">
@@ -468,12 +479,50 @@ async function updateStats(s) {
   $('#statDaily').textContent = (s.today_applied ?? 0) + ' / ' + (s.daily_limit ?? 30);
 }
 
+// OpenAI 兼容服务商预设：选服务商自动填接口地址 + 默认模型，也可自定义手填
+const AI_PRESETS = {
+  deepseek: { base: 'https://api.deepseek.com/v1', def: 'deepseek-chat', models: ['deepseek-chat', 'deepseek-reasoner'] },
+  moonshot: { base: 'https://api.moonshot.cn/v1', def: 'moonshot-v1-8k', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
+  qwen: { base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', def: 'qwen-plus', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
+  zhipu: { base: 'https://open.bigmodel.cn/api/paas/v4', def: 'glm-4-flash', models: ['glm-4-flash', 'glm-4-plus', 'glm-4'] },
+  openai: { base: 'https://api.openai.com/v1', def: 'gpt-4o-mini', models: ['gpt-4o-mini', 'gpt-4o'] },
+  ollama: { base: 'http://localhost:11434/v1', def: 'qwen2.5:7b', models: ['qwen2.5:7b', 'llama3.1:8b'] },
+  custom: { base: '', def: '', models: [] },
+};
+
+// 按 base_url 反推服务商，未命中预设则归为「自定义」
+function matchProvider(base) {
+  return Object.keys(AI_PRESETS).find(k => k !== 'custom' && AI_PRESETS[k].base === base) || 'custom';
+}
+
+// 重建模型候选列表（datalist），用户仍可手输任意模型名
+function buildModelList(key) {
+  const dl = $('#modelList');
+  dl.innerHTML = '';
+  (AI_PRESETS[key]?.models || []).forEach(m => {
+    const o = document.createElement('option');
+    o.value = m;
+    dl.appendChild(o);
+  });
+}
+
+function applyPreset(key) {
+  const p = AI_PRESETS[key];
+  if (!p) return;
+  $('#baseUrl').value = p.base;
+  $('#model').value = p.def;
+  buildModelList(key);
+}
+
 async function loadConfig() {
   const c = await api('/api/config');
   const pf = $('#platform').value;
   // AI / 模型
   $('#apiKey').value = c.ai?.api_key || '';
+  $('#baseUrl').value = c.ai?.base_url || '';
   $('#model').value = c.ai?.model || 'deepseek-chat';
+  $('#aiProvider').value = matchProvider(c.ai?.base_url || '');
+  buildModelList($('#aiProvider').value);
   $('#threshold').value = c.scoring?.threshold ?? 60;
   // 简历与硬性过滤
   const prof = c.profile || {};
@@ -509,7 +558,7 @@ async function saveConfig() {
   const pf = $('#platform').value;
   const num = (id, d) => { const v = Number($('#' + id).value); return Number.isFinite(v) ? v : d; };
   const body = {
-    ai: { model: $('#model').value },
+    ai: { model: $('#model').value.trim(), base_url: $('#baseUrl').value.trim() },
     // 防御：api_key 框显示的是掩码，未改则不发送，避免覆盖真值
     scoring: { threshold: num('threshold', 60) },
     profile: {
@@ -730,6 +779,7 @@ $('#btnPause').onclick = async () => {
 $('#btnSave').onclick = saveConfig;
 $('#filter').onchange = loadJobs;
 $('#platform').onchange = () => setPlatform($('#platform').value);
+$('#aiProvider').onchange = () => applyPreset($('#aiProvider').value);
 $('#btnDismissBlocked').onclick = () => {
   applyBlockedDismissed = true;
   $('#applyBlockedAlert').classList.remove('show');
