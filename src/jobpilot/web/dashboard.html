@@ -391,6 +391,12 @@
         <div class="row row-between" style="margin-bottom:8px">
           <h3 style="margin:0">最近采集到的岗位</h3>
           <div class="row">
+            <select id="recentPlatformFilter">
+              <option value="">全部平台</option>
+              <option value="51job">前程无忧</option>
+              <option value="liepin">猎聘</option>
+              <option value="zhaopin">智联招聘</option>
+            </select>
             <select id="recentFilter">
               <option value="">全部状态</option>
               <option value="new">未处理</option>
@@ -399,6 +405,13 @@
               <option value="applied">已投递</option>
               <option value="unsupported">不支持</option>
               <option value="rejected">被拒</option>
+            </select>
+            <select id="recentTimeFilter">
+              <option value="">全部时间</option>
+              <option value="today">今天</option>
+              <option value="1h">最近1小时</option>
+              <option value="24h">最近24小时</option>
+              <option value="7d">最近7天</option>
             </select>
             <span class="muted" id="recentJobsHint"></span>
           </div>
@@ -728,17 +741,31 @@ function renderSpark(key, elId) {
 const PLAT_NAME = { '51job': '前程无忧', 'liepin': '猎聘', 'zhaopin': '智联' };
 const STATUS_NAME = { new:'未处理', scored:'已评分', approved:'通过', applied:'已投递', unsupported:'不支持', rejected:'被拒' };
 let recentJobsAll = [];
+function jobTs(j) { const t = Date.parse((j.created_at || '').replace(' ', 'T')); return isNaN(t) ? 0 : t; }
 function renderRecentJobs() {
   const tb = document.getElementById('recentJobs');
   if (!tb) return;
   tb.innerHTML = '';
   const all = recentJobsAll;
   const f = ($('#recentFilter') ? $('#recentFilter').value : '') || '';
+  const pf = ($('#recentPlatformFilter') ? $('#recentPlatformFilter').value : '') || '';
+  const tf = ($('#recentTimeFilter') ? $('#recentTimeFilter').value : '') || '';
+  let cutoff = null;
+  if (tf === 'today') { const d = new Date(); d.setHours(0, 0, 0, 0); cutoff = d.getTime(); }
+  else if (tf === '1h') cutoff = Date.now() - 3600e3;
+  else if (tf === '24h') cutoff = Date.now() - 86400e3;
+  else if (tf === '7d') cutoff = Date.now() - 7 * 86400e3;
+  const filtered = !!(f || pf || cutoff);
+  const view = all.filter(j => {
+    if (f && (j.status || 'new') !== f) return false;
+    if (pf && j._platform !== pf) return false;
+    if (cutoff && jobTs(j) < cutoff) return false;
+    return true;
+  });
   const hint = document.getElementById('recentJobsHint');
-  if (hint) hint.textContent = all.length ? `共 ${all.length} 个 · 显示最新 12` : '';
-  const view = f ? all.filter(j => (j.status || 'new') === f) : all;
+  if (hint) hint.textContent = filtered ? `筛选后 ${view.length} / 共 ${all.length} 个` : (all.length ? `共 ${all.length} 个 · 显示最新 12` : '');
   if (!view.length) {
-    tb.innerHTML = `<tr><td colspan="6" class="empty-state">${all.length ? '该状态下还没有岗位。' : '还没有采集到岗位。点上方「采集」开始。'}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="6" class="empty-state">${all.length ? '没有符合筛选条件的岗位。' : '还没有采集到岗位。点上方「采集」开始。'}</td></tr>`;
     return;
   }
   const sorted = view.slice().sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
@@ -1083,6 +1110,8 @@ $('#btnPause').onclick = async () => {
 };
 $('#btnSave').onclick = saveConfig;
 $('#recentFilter').onchange = renderRecentJobs;
+$('#recentPlatformFilter').onchange = renderRecentJobs;
+$('#recentTimeFilter').onchange = renderRecentJobs;
 $('#filter').onchange = loadJobs;
 $('#platform').onchange = () => setPlatform($('#platform').value);
 $('#aiProvider').onchange = () => applyPreset($('#aiProvider').value);
