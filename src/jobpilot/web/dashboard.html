@@ -273,10 +273,10 @@
 <header>
   <div class="brand">
     <h1>JobPilot · 求职领航</h1>
-    <span class="brand-handle">抖音 <b>@少年游</b></span>
+    <span class="brand-handle">少年游</span>
   </div>
   <div class="header-meta">
-    <span class="ver" id="verTag">{{VERSION}}</span>
+    <span class="ver" id="verTag">v0.1.0</span>
     <div id="health" class="health"></div>
   </div>
 </header>
@@ -1065,6 +1065,7 @@ document.getElementById('themeToggle').onclick = () => {
 
 (async () => {
   Theme.init();
+  try { const v = await api('/api/version'); if (v && v.version) document.getElementById('verTag').textContent = 'v' + v.version; } catch (e) {}
   await refreshHealth(); buildPlatformSwitch();
   await loadConfig(); await loadJobs();
   updateCollectOnlyHint(); await poll();

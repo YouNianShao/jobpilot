@@ -114,10 +114,12 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         if path in ("/", "/index.html"):
             if DASHBOARD.exists():
-                html = DASHBOARD.read_bytes().decode("utf-8").replace("{{VERSION}}", _app_version())
-                self._send(200, html.encode("utf-8"), "text/html")
+                self._send(200, DASHBOARD.read_bytes(), "text/html")
             else:
                 self._send(404, {"error": "dashboard.html 缺失"})
+            return
+        if path == "/api/version":
+            self._send(200, {"version": _app_version()})
             return
         if path == "/api/jobs":
             q = parse_qs(p.query)
