@@ -393,12 +393,12 @@
           <div class="row">
             <select id="recentFilter">
               <option value="">全部状态</option>
-              <option value="new">new</option>
-              <option value="scored">scored</option>
-              <option value="approved">approved</option>
-              <option value="applied">applied</option>
-              <option value="unsupported">unsupported</option>
-              <option value="rejected">rejected</option>
+              <option value="new">未处理</option>
+              <option value="scored">已评分</option>
+              <option value="approved">通过</option>
+              <option value="applied">已投递</option>
+              <option value="unsupported">不支持</option>
+              <option value="rejected">被拒</option>
             </select>
             <span class="muted" id="recentJobsHint"></span>
           </div>
@@ -430,11 +430,12 @@
             </select>
             <select id="filter">
               <option value="">全部状态</option>
-              <option value="new">new</option>
-              <option value="scored">scored</option>
-              <option value="approved">approved</option>
-              <option value="applied">applied</option>
-              <option value="unsupported">unsupported</option>
+              <option value="new">未处理</option>
+              <option value="scored">已评分</option>
+              <option value="approved">通过</option>
+              <option value="applied">已投递</option>
+              <option value="unsupported">不支持</option>
+              <option value="rejected">被拒</option>
             </select>
           </div>
         </div>
@@ -446,12 +447,12 @@
         </div>
         <p class="muted" style="margin:8px 0 0">「操作」列：点 <b>去投递 ↗ / 直达 ↗</b> 在新标签页打开该岗位的原始页面（可查看 JD 详情并手动投递）。建议筛选状态 new / approved 后逐个处理。</p>
         <div class="legend">
-          <span class="badge b-new">new 未处理</span>
-          <span class="badge b-scored">scored 已评分</span>
-          <span class="badge b-approved">approved 通过</span>
-          <span class="badge b-applied">applied 已投递</span>
-          <span class="badge b-unsupported">unsupported 不支持</span>
-          <span class="badge b-rejected">rejected 被拒</span>
+          <span class="badge b-new">未处理</span>
+          <span class="badge b-scored">已评分</span>
+          <span class="badge b-approved">通过</span>
+          <span class="badge b-applied">已投递</span>
+          <span class="badge b-unsupported">不支持</span>
+          <span class="badge b-rejected">被拒</span>
         </div>
       </div>
     </section>
@@ -698,7 +699,7 @@ async function loadJobs() {
       : '<span class="muted">-</span>';
     tr.innerHTML = `<td>${j.title||''}</td><td>${j.company||''}</td><td>${j.city||''}</td>
       <td>${j.salary||''}</td><td>${j.score ?? '-'}</td>
-      <td><span class="badge ${cls}">${j.status||'new'}</span></td>
+      <td><span class="badge ${cls}">${STATUS_NAME[j.status||'new'] || j.status||'new'}</span></td>
       <td class="op-cell">${opCell}</td>`;
     tb.appendChild(tr);
   }
@@ -725,6 +726,7 @@ function renderSpark(key, elId) {
 
 // 工作台：最近采集岗位一览（复用 updateStats 已聚合的数据，不额外请求）
 const PLAT_NAME = { '51job': '前程无忧', 'liepin': '猎聘', 'zhaopin': '智联' };
+const STATUS_NAME = { new:'未处理', scored:'已评分', approved:'通过', applied:'已投递', unsupported:'不支持', rejected:'被拒' };
 let recentJobsAll = [];
 function renderRecentJobs() {
   const tb = document.getElementById('recentJobs');
@@ -747,7 +749,7 @@ function renderRecentJobs() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${j.title || ''}</td><td>${j.company || ''}</td>` +
       `<td>${PLAT_NAME[j._platform] || j._platform || ''}</td>` +
-      `<td><span class="badge ${cls}">${j.status || 'new'}</span></td>` +
+      `<td><span class="badge ${cls}">${STATUS_NAME[j.status || 'new'] || j.status || 'new'}</span></td>` +
       `<td class="muted">${j.created_at ? j.created_at.slice(5, 16) : '-'}</td>` +
       `<td class="op-cell">${op}</td>`;
     tb.appendChild(tr);
