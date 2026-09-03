@@ -48,7 +48,7 @@
     --b-amber-bg:#fbf3e3; --b-amber-fg:#9a6b02;
     --b-unsupported-bg:#f1f1f3; --b-unsupported-fg:#5f5e67;
     --b-rejected-bg:#fdeced; --b-rejected-fg:#b62f34;
-    --nav-hover:#ececf1; --nav-active:#e6e6f4; --log-bg:#1c1d22; --log-fg:#d6d6db;
+    --nav-hover:#ececf1; --nav-active:#e6e6f4;
   }
   /* ===== Linear 暗色模式 ===== */
   [data-theme="dark"] {
@@ -82,7 +82,7 @@
     --b-amber-bg:#2e2410; --b-amber-fg:#e0b257;
     --b-unsupported-bg:#1d1e22; --b-unsupported-fg:#9a9ba4;
     --b-rejected-bg:#331417; --b-rejected-fg:#f0797f;
-    --nav-hover:#1d1e22; --nav-active:#262730; --log-bg:#0a0a0c; --log-fg:#c5c6cd;
+    --nav-hover:#1d1e22; --nav-active:#262730;
   }
   * { box-sizing:border-box; }
   *:focus-visible { outline:2px solid var(--primary); outline-offset:3px; border-radius:4px; }
@@ -168,8 +168,6 @@
   .legend { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-faint); }
   input,select { padding:9px 12px; border:1px solid var(--line); border-radius:var(--r-md); font-size:14px; background:var(--input-bg); color:var(--input-fg); transition:border-color .15s ease; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-  #log { background:var(--log-bg); color:var(--log-fg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
-         height:180px; overflow:auto; border-radius:var(--r-md); padding:14px; white-space:pre-wrap; margin:0; }
   .muted { color:var(--muted); font-size:13px; }
   a { color:var(--primary-ink); }
   .btn-mini { padding:5px 12px; font-size:13px; border-radius:var(--r-sm); }
@@ -389,10 +387,6 @@
         </div>
       </div>
 
-      <div class="card reveal">
-        <h2 style="margin:0 0 8px">运行日志</h2>
-        <pre id="log"></pre>
-      </div>
     </section>
 
     <!-- ===== 岗位池 ===== -->
@@ -990,13 +984,6 @@ async function poll() {
     $('#lastAction').textContent = '暂无';
   }
 
-  const log = $('#log');
-  if (s.recent && s.recent.length) {
-    log.textContent = s.recent.map(r => {
-      const t = r.title ? `${r.title} @ ${r.company}` : (r.job_id || '');
-      return `[${r.created_at}] ${r.action}/${r.detail}  ${t}`;
-    }).reverse().join('\n');
-  }
   $('#hc').textContent = (s.last && !s.running) ? '上次结果: ' + JSON.stringify(s.last) : '';
 
   const mon = s.monitor || {};
