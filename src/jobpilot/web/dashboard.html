@@ -450,6 +450,13 @@
               <option value="unsupported">不支持</option>
               <option value="rejected">被拒</option>
             </select>
+            <select id="poolTimeFilter">
+              <option value="">全部时间</option>
+              <option value="today">今天</option>
+              <option value="1h">最近1小时</option>
+              <option value="24h">最近24小时</option>
+              <option value="7d">最近7天</option>
+            </select>
           </div>
         </div>
         <div class="table-scroll">
@@ -458,7 +465,7 @@
           <tbody id="jobs"></tbody>
         </table>
         </div>
-        <p class="muted" style="margin:8px 0 0">「操作」列：点 <b>去投递 ↗ / 直达 ↗</b> 在新标签页打开该岗位的原始页面（可查看 JD 详情并手动投递）。建议筛选状态 new / approved 后逐个处理。</p>
+        <p class="muted" style="margin:8px 0 0">「操作」列：点 <b>去投递 ↗ / 直达 ↗</b> 在新标签页打开该岗位的原始页面（可查看 JD 详情并手动投递）。建议筛选状态 未处理 / 通过 后逐个处理。</p>
         <div class="legend">
           <span class="badge b-new">未处理</span>
           <span class="badge b-scored">已评分</span>
@@ -699,7 +706,19 @@ async function loadJobs() {
     </td></tr>`;
     return;
   }
-  for (const j of jobs) {
+  // 时间筛选：客户端过滤（后端 /api/jobs 不支持时间参数，与工作台最近采集块实现一致）
+  const tf = ($('#poolTimeFilter') ? $('#poolTimeFilter').value : '') || '';
+  let cutoff = null;
+  if (tf === 'today') { const d = new Date(); d.setHours(0, 0, 0, 0); cutoff = d.getTime(); }
+  else if (tf === '1h') cutoff = Date.now() - 3600e3;
+  else if (tf === '24h') cutoff = Date.now() - 86400e3;
+  else if (tf === '7d') cutoff = Date.now() - 7 * 86400e3;
+  const view = cutoff ? jobs.filter(j => jobTs(j) >= cutoff) : jobs;
+  if (!view.length) {
+    tb.innerHTML = `<tr><td colspan="7" class="empty-state">该时间范围内没有岗位，换个时间范围试试。</td></tr>`;
+    return;
+  }
+  for (const j of view) {
     const cls = 'b-' + (j.status || 'new');
     const tr = document.createElement('tr');
     // 操作列：智联（采集-only）用醒目「去投递」按钮引导手动投递；其他平台普通直达链接
@@ -1113,6 +1132,7 @@ $('#recentFilter').onchange = renderRecentJobs;
 $('#recentPlatformFilter').onchange = renderRecentJobs;
 $('#recentTimeFilter').onchange = renderRecentJobs;
 $('#filter').onchange = loadJobs;
+$('#poolTimeFilter').onchange = loadJobs;
 $('#platform').onchange = () => setPlatform($('#platform').value);
 $('#aiProvider').onchange = () => applyPreset($('#aiProvider').value);
 $('#btnDismissBlocked').onclick = () => {
