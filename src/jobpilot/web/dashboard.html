@@ -390,11 +390,22 @@
       <div class="card reveal">
         <div class="row row-between" style="margin-bottom:8px">
           <h3 style="margin:0">最近采集到的岗位</h3>
-          <span class="muted" id="recentJobsHint"></span>
+          <div class="row">
+            <select id="recentFilter">
+              <option value="">全部状态</option>
+              <option value="new">new</option>
+              <option value="scored">scored</option>
+              <option value="approved">approved</option>
+              <option value="applied">applied</option>
+              <option value="unsupported">unsupported</option>
+              <option value="rejected">rejected</option>
+            </select>
+            <span class="muted" id="recentJobsHint"></span>
+          </div>
         </div>
         <div class="table-scroll">
         <table>
-          <thead><tr><th>标题</th><th>公司</th><th>平台</th><th>状态</th><th>操作</th></tr></thead>
+          <thead><tr><th>标题</th><th>公司</th><th>平台</th><th>状态</th><th>采集时间</th><th>操作</th></tr></thead>
           <tbody id="recentJobs"></tbody>
         </table>
         </div>
@@ -714,17 +725,21 @@ function renderSpark(key, elId) {
 
 // 工作台：最近采集岗位一览（复用 updateStats 已聚合的数据，不额外请求）
 const PLAT_NAME = { '51job': '前程无忧', 'liepin': '猎聘', 'zhaopin': '智联' };
-function renderRecentJobs(jobs) {
+let recentJobsAll = [];
+function renderRecentJobs() {
   const tb = document.getElementById('recentJobs');
   if (!tb) return;
   tb.innerHTML = '';
+  const all = recentJobsAll;
+  const f = ($('#recentFilter') ? $('#recentFilter').value : '') || '';
   const hint = document.getElementById('recentJobsHint');
-  if (hint) hint.textContent = jobs && jobs.length ? `共 ${jobs.length} 个 · 显示最新 12` : '';
-  if (!jobs || !jobs.length) {
-    tb.innerHTML = `<tr><td colspan="5" class="empty-state">还没有采集到岗位。点上方「采集」开始。</td></tr>`;
+  if (hint) hint.textContent = all.length ? `共 ${all.length} 个 · 显示最新 12` : '';
+  const view = f ? all.filter(j => (j.status || 'new') === f) : all;
+  if (!view.length) {
+    tb.innerHTML = `<tr><td colspan="6" class="empty-state">${all.length ? '该状态下还没有岗位。' : '还没有采集到岗位。点上方「采集」开始。'}</td></tr>`;
     return;
   }
-  const sorted = jobs.slice().sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  const sorted = view.slice().sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
   for (const j of sorted.slice(0, 12)) {
     const cls = 'b-' + (j.status || 'new');
     const url = j.url || '';
@@ -733,6 +748,7 @@ function renderRecentJobs(jobs) {
     tr.innerHTML = `<td>${j.title || ''}</td><td>${j.company || ''}</td>` +
       `<td>${PLAT_NAME[j._platform] || j._platform || ''}</td>` +
       `<td><span class="badge ${cls}">${j.status || 'new'}</span></td>` +
+      `<td class="muted">${j.created_at ? j.created_at.slice(5, 16) : '-'}</td>` +
       `<td class="op-cell">${op}</td>`;
     tb.appendChild(tr);
   }
@@ -754,7 +770,8 @@ async function updateStats(s) {
       collected.push({ ...j, _platform: pf });
     }
   }
-  renderRecentJobs(collected);
+  recentJobsAll = collected;
+  renderRecentJobs();
   $('#statTotal').textContent = total;
   $('#statApproved').textContent = approved;
   $('#statApplied').textContent = s.today_applied ?? 0;
@@ -1063,6 +1080,7 @@ $('#btnPause').onclick = async () => {
   poll();
 };
 $('#btnSave').onclick = saveConfig;
+$('#recentFilter').onchange = renderRecentJobs;
 $('#filter').onchange = loadJobs;
 $('#platform').onchange = () => setPlatform($('#platform').value);
 $('#aiProvider').onchange = () => applyPreset($('#aiProvider').value);
