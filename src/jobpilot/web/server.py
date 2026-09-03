@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata as _md
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -97,7 +98,7 @@ def _monitor_scheduler() -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, code: int, body: Any = None, ctype: str = "application/json") -> None:
+    def _send(self, code: int, body: Any = None, ctype: str = "application/json", nocache: bool = False) -> None:
         if ctype == "application/json":
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         else:
@@ -106,6 +107,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", f"{ctype}; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        if nocache:
+            self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -114,12 +117,12 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         if path in ("/", "/index.html"):
             if DASHBOARD.exists():
-                self._send(200, DASHBOARD.read_bytes(), "text/html")
+                self._send(200, DASHBOARD.read_bytes(), "text/html", nocache=True)
             else:
                 self._send(404, {"error": "dashboard.html 缺失"})
             return
         if path == "/api/version":
-            self._send(200, {"version": _app_version()})
+            self._send(200, {"version": _app_version()}, nocache=True)
             return
         if path == "/api/jobs":
             q = parse_qs(p.query)
@@ -225,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
                 "throttle": cfg.get("throttle", {}),
                 "profile": cfg.get("profile", {}),
                 "monitor": cfg.get("monitor", {}),
-            })
+            }, nocache=True)
             return
         if path == "/api/browser_health":
             cfg = load_config()
