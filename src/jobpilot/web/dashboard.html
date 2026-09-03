@@ -123,7 +123,7 @@
   .theme-toggle svg { width:16px; height:16px; flex:0 0 16px; }
   .theme-toggle:hover { background:var(--nav-hover); color:var(--text); }
   .sidebar-foot .foot { color:var(--muted); font-size:11px; word-break:break-all; padding:2px 9px; }
-  .spark { width:100%; height:28px; margin-top:12px; display:block; }
+  .spark { width:auto; height:22px; margin:0; display:block; position:absolute; left:22px; right:22px; bottom:14px; }
   .spark .line { fill:none; stroke:var(--primary-ink); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
   .spark .fill { fill:var(--primary-soft); opacity:.4; stroke:none; }
 
@@ -189,7 +189,7 @@
   }
   /* 统计卡片 */
   .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:18px; }
-  .stat { background:var(--card); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:20px 22px; box-shadow:var(--shadow-sm); transition:transform .2s ease, box-shadow .2s ease; }
+  .stat { background:var(--card); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:20px 22px; box-shadow:var(--shadow-sm); transition:transform .2s ease, box-shadow .2s ease; position:relative; min-height:96px; }
   .stat:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); }
   .stat .n { font-size:34px; font-weight:600; color:var(--text); line-height:1.05; letter-spacing:-.02em; }
   .stat .l { color:var(--muted); font-size:13px; margin-top:8px; }
