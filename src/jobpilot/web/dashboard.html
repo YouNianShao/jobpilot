@@ -960,9 +960,15 @@ async function poll() {
     pw.style.display = 'block'; pn.style.display = 'none';
     const pct = prog.total ? Math.round(prog.current / prog.total * 100) : 0;
     $('#progBar').style.transform = 'scaleX(' + (pct/100) + ')';
-    $('#progPhase').textContent = PHASE_NAME[prog.phase] || prog.phase || '';
-    $('#progCount').textContent = prog.current + ' / ' + prog.total;
-    $('#progLabel').textContent = prog.label || '';
+    if (s.paused) {
+      $('#progPhase').textContent = '已暂停';
+      $('#progCount').textContent = '点击「继续」恢复';
+      $('#progLabel').textContent = '原阶段：' + (PHASE_NAME[prog.phase] || prog.phase || '');
+    } else {
+      $('#progPhase').textContent = PHASE_NAME[prog.phase] || prog.phase || '';
+      $('#progCount').textContent = prog.current + ' / ' + prog.total;
+      $('#progLabel').textContent = prog.label || '';
+    }
     const lbl = $('#progLabel');
     if (prog.label && prog.label.includes('拦截')) {
       lbl.style.color = 'var(--bad)'; lbl.style.fontWeight = '700';
