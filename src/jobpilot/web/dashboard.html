@@ -5,168 +5,356 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>JobPilot 求职领航</title>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff;
-          --line:#e4e7ec; --line-strong:#d0d5dd;
-          --text:#101828; --text-2:#475467; --muted:#667085;
-          --primary:#2563eb; --primary-d:#1d4ed8; --primary-soft:#eff6ff;
-          --ok:#027a48; --warn:#b54708; --bad:#b42318; --info:#175cd3; --cyan:#0e7090;
-          --r-sm:6px; --r-md:8px; --r-lg:12px; }
+  :root {
+    /* 画布与表面 */
+    --bg:#f7f8f8; --card:#fff;
+    --header-bg:rgba(247,248,248,.72);
+    /* 分隔线（alpha，暗色翻转） */
+    --line:#e7e7ea; --line-strong:#d8d8dc;
+    --line-soft:rgba(0,0,0,.05);
+    --line-faint:rgba(0,0,0,.06);
+    --row-hover:rgba(0,0,0,.02);
+    --ghost-hover:rgba(0,0,0,.04);
+    --header-border:rgba(0,0,0,.08);
+    /* 文本 */
+    --text:#1c1d22; --text-2:#4a4b53; --muted:#6f6e77;
+    /* 品牌与主色 */
+    --primary:#5a5fc4; --primary-d:#4a4fb0; --primary-soft:#eeeffb; --primary-ink:#5a5fc4;
+    --ok:#2c9b5b; --warn:#b98103; --bad:#e5484d; --info:#5a5fc4; --cyan:#0e7c8b;
+    /* 圆角与尺寸 */
+    --r-sm:6px; --r-md:8px; --r-lg:10px; --header-h:48px;
+    /* 阴影 */
+    --shadow-sm:0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.04);
+    --shadow-md:0 4px 16px rgba(0,0,0,.08);
+    /* 表单/控件填充 */
+    --input-bg:#fff; --input-fg:#1c1d22;
+    --plat-track:#e3e3e8; --plat-active-bg:#fff;
+    --prog-track:#e5e7eb;
+    /* HR 高亮 */
+    --hr-active-bg:#e8f1fd; --hr-flash-from:#cfe4ff; --hr-flash-to:#e8f1fd;
+    /* 警示横幅 */
+    --alert-bg:#fde8e8; --alert-border:#f3b9b9; --alert-fg:#b0000a;
+    --alert-btn:#d70015; --alert-btn-hover:#b0000a;
+    --alert-border-pulse1:#f3b9b9; --alert-bg-pulse1:#fde8e8;
+    --alert-border-pulse2:#e89a9a; --alert-bg-pulse2:#fbdada;
+    /* 提示条 */
+    --tip-bg:#eaf3ff; --tip-border:#cfe0ff; --tip-fg:#1d1d1f;
+    /* 状态徽标配色 token（避免硬编码漂移） */
+    --b-new-bg:#f1f1f3; --b-new-fg:#5f5e67;
+    --b-scored-bg:#eeeffb; --b-scored-fg:#4f56b0;
+    --b-approved-bg:#e9f6ef; --b-approved-fg:#1f7a47;
+    --b-interview-bg:#2c9b5b; --b-interview-fg:#fff;
+    --b-applied-bg:#e6f5f7; --b-applied-fg:#0b6675;
+    --b-amber-bg:#fbf3e3; --b-amber-fg:#9a6b02;
+    --b-unsupported-bg:#f1f1f3; --b-unsupported-fg:#5f5e67;
+    --b-rejected-bg:#fdeced; --b-rejected-fg:#b62f34;
+    --nav-hover:#ececf1; --nav-active:#e6e6f4; --log-bg:#1c1d22; --log-fg:#d6d6db;
+  }
+  /* ===== Linear 暗色模式 ===== */
+  [data-theme="dark"] {
+    --bg:#0d0e10; --card:#16171a;
+    --header-bg:rgba(13,14,16,.72);
+    --line:#2a2b30; --line-strong:#34353b;
+    --line-soft:rgba(255,255,255,.06);
+    --line-faint:rgba(255,255,255,.08);
+    --row-hover:rgba(255,255,255,.03);
+    --ghost-hover:rgba(255,255,255,.07);
+    --header-border:rgba(255,255,255,.08);
+    --text:#f2f3f5; --text-2:#b4b5bd; --muted:#8a8b93;
+    --primary:#5e6ad2; --primary-d:#6b76e0; --primary-soft:#1e2030; --primary-ink:#818cf8;
+    --ok:#3fb950; --warn:#d9a441; --bad:#f0616d; --info:#5e6ad2; --cyan:#3fb9c9;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.4), 0 2px 8px rgba(0,0,0,.4);
+    --shadow-md:0 4px 16px rgba(0,0,0,.55);
+    --input-bg:#131418; --input-fg:#f2f3f5;
+    --plat-track:#202126; --plat-active-bg:#2c2d34;
+    --prog-track:#26272c;
+    --hr-active-bg:#15293c; --hr-flash-from:#1c3a55; --hr-flash-to:#15293c;
+    --alert-bg:#2a1416; --alert-border:#5a2630; --alert-fg:#ff9aa0;
+    --alert-btn:#e5484d; --alert-btn-hover:#f0616d;
+    --alert-border-pulse1:#5a2630; --alert-bg-pulse1:#2a1416;
+    --alert-border-pulse2:#7a3440; --alert-bg-pulse2:#34191d;
+    --tip-bg:#0f2233; --tip-border:#234a66; --tip-fg:#bcd6e8;
+    --b-new-bg:#1d1e22; --b-new-fg:#9a9ba4;
+    --b-scored-bg:#1e2030; --b-scored-fg:#9aa2e8;
+    --b-approved-bg:#13301f; --b-approved-fg:#6fd99a;
+    --b-interview-bg:#3fb950; --b-interview-fg:#0d0e10;
+    --b-applied-bg:#0f2e33; --b-applied-fg:#5fc8d6;
+    --b-amber-bg:#2e2410; --b-amber-fg:#e0b257;
+    --b-unsupported-bg:#1d1e22; --b-unsupported-fg:#9a9ba4;
+    --b-rejected-bg:#331417; --b-rejected-fg:#f0797f;
+    --nav-hover:#1d1e22; --nav-active:#262730; --log-bg:#0a0a0c; --log-fg:#c5c6cd;
+  }
   * { box-sizing:border-box; }
-  *:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
-  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;
-         background:var(--bg); color:var(--text); font-size:14px; }
-  header { background:var(--primary); color:#fff; padding:14px 20px; display:flex; align-items:center;
-           justify-content:space-between; }
-  header h1 { margin:0; font-size:18px; font-weight:600; }
-  header .health { color:#fff; font-size:13px; }
+  *:focus-visible { outline:2px solid var(--primary); outline-offset:3px; border-radius:4px; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue","PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+
+  /* 顶部导航：苹果风毛玻璃 */
+  header { position:sticky; top:0; z-index:20; height:var(--header-h);
+           display:flex; align-items:center; justify-content:space-between; padding:0 22px;
+           background:var(--header-bg); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px);
+           border-bottom:1px solid var(--header-border); }
+  header h1 { margin:0; font-size:19px; font-weight:600; letter-spacing:-.01em; }
+  header .health { color:var(--muted); font-size:13px; display:flex; align-items:center; gap:6px; }
+  .brand { display:flex; align-items:baseline; gap:10px; min-width:0; }
+  .brand-handle { color:var(--muted); font-size:12.5px; font-weight:500; white-space:nowrap; }
+  .brand-handle b { color:var(--text-2); font-weight:600; }
+  .header-meta { display:flex; align-items:center; gap:12px; }
+  .ver { color:var(--muted); font-size:12px; font-weight:600; padding:3px 9px; border:1px solid var(--line-soft); border-radius:999px; background:var(--card); white-space:nowrap; }
 
   /* 布局：左侧栏 + 右侧内容 */
-  .layout { display:flex; align-items:flex-start; min-height:calc(100vh - 52px); }
-  .sidebar { width:210px; flex:0 0 210px; background:var(--card); border-right:1px solid var(--line);
-             position:sticky; top:0; align-self:stretch; min-height:calc(100vh - 52px);
-             padding:16px 12px; display:flex; flex-direction:column; }
-  .nav-item { display:flex; align-items:center; gap:10px; width:100%; text-align:left;
-              background:transparent; color:var(--text); border:0; border-radius:var(--r-md); padding:11px 14px;
-              font-size:14px; cursor:pointer; margin-bottom:6px; }
-  .nav-item:hover { background:#eef2ff; }
-  .nav-item.active { background:#eff6ff; color:var(--primary); font-weight:600; box-shadow: inset 3px 0 0 var(--primary); }
-  .sidebar .foot { margin-top:auto; padding:10px 8px 0; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+  .layout { display:flex; align-items:flex-start; min-height:calc(100vh - var(--header-h)); }
+  .sidebar { width:220px; flex:0 0 220px; background:var(--bg); border-right:1px solid var(--line-faint);
+             position:sticky; top:var(--header-h); align-self:stretch; min-height:calc(100vh - var(--header-h));
+             padding:18px 14px; display:flex; flex-direction:column; }
+  .brand { display:flex; align-items:center; gap:9px; padding:4px 9px 14px; }
+  .brand-mark { width:26px; height:26px; border-radius:7px; background:var(--primary); color:#fff; font-size:11px; font-weight:700; letter-spacing:.02em; display:flex; align-items:center; justify-content:center; }
+  .brand-name { font-size:14px; font-weight:600; letter-spacing:-.01em; }
+  .nav-group { display:flex; flex-direction:column; gap:1px; margin-bottom:14px; }
+  .nav-label { font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); padding:6px 9px 4px; }
+  .nav-item { display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+              background:transparent; color:var(--text-2); border:0; border-radius:6px; padding:7px 9px;
+              font-size:13.5px; font-weight:500; cursor:pointer; margin-bottom:1px; transition:background .12s ease,color .12s ease; }
+  .nav-item svg { width:16px; height:16px; flex:0 0 16px; }
+  .nav-item:hover { background:var(--nav-hover); color:var(--text); }
+  .nav-item.active { background:var(--nav-active); color:var(--text); font-weight:600; }
+  .sidebar-foot { margin-top:auto; padding-top:10px; border-top:1px solid var(--line-faint); display:flex; flex-direction:column; gap:8px; }
+  .theme-toggle { display:flex; align-items:center; gap:9px; width:100%; text-align:left; background:transparent; color:var(--text-2); border:0; border-radius:6px; padding:7px 9px; font-size:13.5px; font-weight:500; cursor:pointer; transition:background .12s ease,color .12s ease; }
+  .theme-toggle svg { width:16px; height:16px; flex:0 0 16px; }
+  .theme-toggle:hover { background:var(--nav-hover); color:var(--text); }
+  .sidebar-foot .foot { color:var(--muted); font-size:11px; word-break:break-all; padding:2px 9px; }
+  .spark { width:100%; height:28px; margin-top:12px; display:block; }
+  .spark .line { fill:none; stroke:var(--primary-ink); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+  .spark .fill { fill:var(--primary-soft); opacity:.4; stroke:none; }
 
-  .content { flex:1; padding:18px 22px; min-width:0; }
+  .content { flex:1; padding:26px 30px; min-width:0; max-width:1200px; margin:0 auto; }
   .tab-panel { display:none; }
-  .tab-panel.active { display:block; }
-  .tab-head { margin:0 0 14px; font-size:16px; font-weight:600; }
+  .tab-panel.active { display:block; animation: fadeUp .35s cubic-bezier(.4,0,.2,1); }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+  .tab-head { margin:0 0 16px; font-size:22px; font-weight:600; letter-spacing:-.02em; }
+  h2 { font-size:17px; font-weight:600; letter-spacing:-.01em; margin:0 0 8px; }
+  h3 { font-size:19px; font-weight:600; letter-spacing:-.01em; }
 
-  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px; margin-bottom:16px; }
-  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-  button { background:var(--primary); color:#fff; border:0; border-radius:var(--r-md); padding:8px 14px;
-           font-size:14px; cursor:pointer; }
+  .card { background:var(--card); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:22px; margin-bottom:18px; box-shadow:var(--shadow-sm); }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  button { background:var(--primary); color:#fff; border:0; border-radius:var(--r-md); padding:7px 14px;
+           font-size:14px; font-weight:500; cursor:pointer; transition:background .15s ease, box-shadow .15s ease; }
   button:hover { background:var(--primary-d); }
-  button.ghost { background:#fff; color:var(--primary); border:1px solid var(--primary); }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .status-dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
+  button:active { background:var(--primary-d); }
+  button.ghost { background:transparent; color:var(--text-2); border:1px solid var(--line); }
+  button.ghost:hover { background:var(--ghost-hover); color:var(--text); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
   .dot-ok { background:var(--ok); } .dot-bad { background:var(--bad); } .dot-warn { background:var(--warn); }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
-  th { color:var(--muted); font-weight:600; }
-  .badge { padding:2px 8px; border-radius:var(--r-sm); font-size:12px; font-weight:500; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { text-align:left; padding:13px 14px; border-bottom:1px solid var(--line-faint); }
+  th { color:var(--muted); font-weight:600; font-size:12px; letter-spacing:.02em; }
+  tbody tr { transition:background .15s ease; }
+  tbody tr:hover { background:var(--row-hover); }
+  .badge { padding:3px 9px; border-radius:var(--r-sm); font-size:12px; font-weight:500; }
   /* 状态语义分组：灰=未处理 蓝=进行中 绿=通过 青=已行动 橙=需你处理 红=终止 */
-  .b-new { background:#f2f4f7; color:var(--text-2); }
-  .b-scored { background:#eff8ff; color:var(--info); }
-  .b-approved { background:#ecfdf3; color:var(--ok); }
-  .b-interview { background:var(--ok); color:#fff; font-weight:600; }
-  .b-applied { background:#ecfdff; color:var(--cyan); }
-  .b-replied, .b-viewed, .b-interested { background:#fffaeb; color:var(--warn); }
-  .b-unsupported { background:#f2f4f7; color:var(--muted); }
-  .b-rejected { background:#fef3f2; color:var(--bad); }
-  /* 工具行 / 空状态 / 图例 */
+  .b-new { background:var(--b-new-bg); color:var(--b-new-fg); }
+  .b-scored { background:var(--b-scored-bg); color:var(--b-scored-fg); }
+  .b-approved { background:var(--b-approved-bg); color:var(--b-approved-fg); }
+  .b-interview { background:var(--b-interview-bg); color:var(--b-interview-fg); font-weight:600; }
+  .b-applied { background:var(--b-applied-bg); color:var(--b-applied-fg); }
+  .b-replied, .b-viewed, .b-interested { background:var(--b-amber-bg); color:var(--b-amber-fg); }
+  .b-unsupported { background:var(--b-unsupported-bg); color:var(--b-unsupported-fg); }
+  .b-rejected { background:var(--b-rejected-bg); color:var(--b-rejected-fg); }
   .row-between { justify-content:space-between; }
   .stat .n, th, td { font-variant-numeric:tabular-nums; }
-  .empty-state { text-align:center; padding:30px 16px; color:var(--muted); font-size:13px; line-height:1.8; }
+  .empty-state { text-align:center; padding:48px 16px; color:var(--muted); font-size:14px; line-height:1.7; }
   .empty-state .ico { font-size:22px; display:block; margin-bottom:6px; }
-  .legend { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
-  input,select { padding:7px 9px; border:1px solid var(--line); border-radius:var(--r-md); font-size:13px; }
-  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  #log { background:#0f172a; color:#cbd5e1; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
-         height:160px; overflow:auto; border-radius:var(--r-md); padding:10px; white-space:pre-wrap; margin:0; }
-  .muted { color:var(--muted); font-size:12px; }
-  a { color:var(--primary); }
-  .btn-mini { padding:4px 9px; font-size:12px; border-radius:var(--r-sm); }
-  tr.hr-active { background:#fff7ed; box-shadow: inset 3px 0 0 var(--primary); }
-  tr.hr-active td { border-bottom-color:#fed7aa; }
-  @keyframes hrflash { 0%{background:#fde68a;} 100%{background:#fff7ed;} }
+  .legend { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-faint); }
+  input,select { padding:9px 12px; border:1px solid var(--line); border-radius:var(--r-md); font-size:14px; background:var(--input-bg); color:var(--input-fg); transition:border-color .15s ease; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  #log { background:var(--log-bg); color:var(--log-fg); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+         height:180px; overflow:auto; border-radius:var(--r-md); padding:14px; white-space:pre-wrap; margin:0; }
+  .muted { color:var(--muted); font-size:13px; }
+  a { color:var(--primary-ink); }
+  .btn-mini { padding:5px 12px; font-size:13px; border-radius:var(--r-sm); }
+  tr.hr-active { background:var(--hr-active-bg); box-shadow: inset 3px 0 0 var(--primary); }
+  tr.hr-active td { border-bottom-color:var(--line-faint); }
+  @keyframes hrflash { 0%{background:var(--hr-flash-from);} 100%{background:var(--hr-flash-to);} }
   tr.hr-flash { animation: hrflash 1.2s ease-out; }
-  /* 投递被拦截：醒目红色警示横幅 */
-  .alert-danger { display:none; background:#fee2e2; border:2px solid var(--bad); color:#991b1b;
-    border-radius:var(--r-md); padding:12px 16px; margin-top:14px; font-weight:600; font-size:15px;
+  /* 投递被拦截：红色警示横幅（中性，无彩色光晕） */
+  .alert-danger { display:none; background:var(--alert-bg); border:1px solid var(--alert-border); color:var(--alert-fg);
+    border-radius:var(--r-md); padding:14px 18px; margin-top:16px; font-weight:600; font-size:15px;
     align-items:center; justify-content:space-between; gap:12px; }
-  .alert-danger.show { display:flex; animation: pulseRed 1.6s infinite; }
+  .alert-danger.show { display:flex; animation: alertPulse 2s ease-in-out infinite; }
   .alert-danger .ico { font-size:17px; margin-right:6px; }
-  .alert-danger button { background:var(--bad); color:#fff; border:1px solid var(--bad); padding:5px 12px; font-size:13px; }
-  .alert-danger button:hover { background:#b91c1c; }
-  @keyframes pulseRed {
-    0%   { box-shadow:0 0 0 0 rgba(220,38,38,.55); }
-    70%  { box-shadow:0 0 9px rgba(220,38,38,0); }
-    100% { box-shadow:0 0 0 0 rgba(220,38,38,0); }
+  .alert-danger button { background:var(--alert-btn); color:#fff; border:1px solid var(--alert-btn); padding:6px 14px; font-size:13px; border-radius:var(--r-md); }
+  .alert-danger button:hover { background:var(--alert-btn-hover); color:#fff; border-color:var(--alert-btn-hover); }
+  @keyframes alertPulse {
+    0%,100% { border-color:var(--alert-border-pulse1); background:var(--alert-bg-pulse1); }
+    50%     { border-color:var(--alert-border-pulse2); background:var(--alert-bg-pulse2); }
   }
   /* 统计卡片 */
-  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
-  .stat { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg); padding:14px 16px; }
-  .stat .n { font-size:26px; font-weight:700; color:var(--text); line-height:1.1; }
-  .stat .l { color:var(--muted); font-size:12px; margin-top:6px; }
-  .stat .sub { color:var(--muted); font-size:11px; margin-top:2px; }
-  .stat.accent .n { color:var(--primary); }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:18px; }
+  .stat { background:var(--card); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:20px 22px; box-shadow:var(--shadow-sm); transition:transform .2s ease, box-shadow .2s ease; }
+  .stat:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); }
+  .stat .n { font-size:34px; font-weight:600; color:var(--text); line-height:1.05; letter-spacing:-.02em; }
+  .stat .l { color:var(--muted); font-size:13px; margin-top:8px; }
+  .stat .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+  .stat.accent .n { color:var(--primary-ink); }
   /* 岗位池：手动投递提示条 + 直达链接 */
-  .tip-info { display:none; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af;
-              border-radius:var(--r-md); padding:10px 14px; margin-bottom:12px; font-size:13px; line-height:1.6; }
+  .tip-info { display:none; background:var(--tip-bg); border:1px solid var(--tip-border); color:var(--tip-fg);
+              border-radius:var(--r-md); padding:12px 16px; margin-bottom:14px; font-size:14px; line-height:1.6; }
   .tip-info.show { display:block; }
-  a.apply-link { display:inline-block; padding:4px 10px; border-radius:var(--r-sm); background:var(--primary);
-                 color:#fff; text-decoration:none; font-size:12px; white-space:nowrap; }
+  a.apply-link { display:inline-block; padding:5px 14px; border-radius:var(--r-md); background:var(--primary);
+                 color:#fff; text-decoration:none; font-size:13px; font-weight:500; white-space:nowrap; transition:background .15s ease; }
   a.apply-link:hover { background:var(--primary-d); }
   td.op-cell { white-space:nowrap; }
-  /* 工作台：平台切换按钮组 */
-  .plat-switch { display:inline-flex; background:#f1f5f9; border:1px solid var(--line); border-radius:var(--r-md); padding:2px; }
-  .plat-switch .plat-btn { background:transparent; color:var(--muted); border:0; border-radius:var(--r-sm);
-                           padding:6px 13px; font-size:13px; cursor:pointer; }
-  .plat-switch .plat-btn:hover { background:#e2e8f0; color:var(--text); }
-  .plat-switch .plat-btn.active { background:var(--primary); color:#fff; font-weight:600; }
-  .plat-switch .plat-btn.active:hover { background:var(--primary-d); }
+  /* 工作台：平台切换（iOS 分段控件） */
+  .plat-switch { display:inline-flex; background:var(--plat-track); border-radius:9px; padding:2px; }
+  .plat-switch .plat-btn { background:transparent; color:var(--text-2); border:0; border-radius:7px;
+                           padding:6px 14px; font-size:14px; cursor:pointer; transition:all .15s ease; }
+  .plat-switch .plat-btn:hover { color:var(--text); }
+  .plat-switch .plat-btn.active { background:var(--plat-active-bg); color:var(--text); font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  .plat-switch .plat-btn.active:hover { background:var(--plat-active-bg); }
   /* 配置 tab：复选框行 */
-  .switch-line { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--text); margin-top:6px; }
-  .switch-line input { width:15px; height:15px; accent-color:var(--primary); }
+  .switch-line { display:inline-flex; align-items:center; gap:8px; font-size:14px; color:var(--text); margin-top:6px; }
+  .switch-line input { width:17px; height:17px; accent-color:var(--primary); }
   textarea { font-family:inherit; }
+
+  /* ===== 工作台首屏：Linear 风格（紧凑仪表盘，去掉商店感） ===== */
+  /* 页头：左对齐小标题 + 主操作，非居中大 hero */
+  .page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:22px; }
+  .page-head h1 { margin:0; font-size:26px; font-weight:600; letter-spacing:-.02em; }
+  .page-sub { margin:6px 0 0; color:var(--muted); font-size:14px; }
+  /* 工具条卡片（采集/评分/投递/监测 紧凑排布） */
+  .toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .toolbar .spacer { flex:1; }
+  .toolbar .plat-label { color:var(--muted); font-size:13px; }
+
+  /* 滚动渐显（克制动效） */
+  .reveal { opacity:0; transform:translateY(14px); transition:opacity .45s cubic-bezier(.16,1,.3,1), transform .45s cubic-bezier(.16,1,.3,1); }
+  .reveal.in { opacity:1; transform:none; }
+
+  /* 响应式：桌面优先，窄屏结构塌缩（impeccable adapt） */
+  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  @media (max-width: 900px) {
+    .layout { flex-direction:column; }
+    .sidebar { width:100%; flex:none; position:static; min-height:auto; flex-direction:row; flex-wrap:wrap;
+               align-items:center; border-right:0; border-bottom:1px solid var(--header-border); padding:10px 14px; gap:4px; }
+    .brand { display:none; }
+    .nav-group { flex-direction:row; flex-wrap:wrap; margin-bottom:0; gap:2px; }
+    .nav-label { display:none; }
+    .nav-item { width:auto; margin-bottom:0; }
+    .sidebar-foot { margin-top:0; border-top:0; padding-top:0; flex-direction:row; flex-wrap:wrap; }
+    .sidebar-foot .foot { display:none; }
+    .content { max-width:none; padding:20px; }
+    .stats { grid-template-columns:repeat(2,1fr); }
+  }
+  @media (max-width: 640px) {
+    .content { padding:16px; }
+    .card { padding:16px; }
+    .tab-head { font-size:22px; }
+    .stats { grid-template-columns:1fr; }
+    .grid2 { grid-template-columns:1fr; }
+    .row { gap:8px; }
+    .stat .n { font-size:26px; }
+  }
+  /* 动效敏感用户降级（impeccable harden） */
+  @media (prefers-reduced-motion: reduce) {
+    .alert-danger.show { animation:none; }
+    tr.hr-flash { animation:none; }
+    .tab-panel.active { animation:none; }
+    .reveal { opacity:1; transform:none; transition:none; }
+    #progBar { transition:none; }
+    * { scroll-behavior:auto !important; }
+  }
 </style>
+<script>
+  try { var _t = localStorage.getItem('jobpilot-theme'); if (_t === 'dark' || _t === 'light') document.documentElement.setAttribute('data-theme', _t); } catch (e) {}
+</script>
 </head>
 <body>
 <header>
-  <h1>JobPilot · 求职领航</h1>
-  <div id="health" class="health"></div>
+  <div class="brand">
+    <h1>JobPilot · 求职领航</h1>
+    <span class="brand-handle">抖音 <b>@少年游</b></span>
+  </div>
+  <div class="header-meta">
+    <span class="ver" id="verTag">{{VERSION}}</span>
+    <div id="health" class="health"></div>
+  </div>
 </header>
 
 <div class="layout">
   <aside class="sidebar">
-    <nav>
-      <button class="nav-item active" data-tab="workbench">🏠 工作台</button>
-      <button class="nav-item" data-tab="pool">📋 岗位池</button>
-      <button class="nav-item" data-tab="monitor">🔍 监测执行</button>
-      <button class="nav-item" data-tab="config">⚙ 配置</button>
+    <div class="brand">
+      <span class="brand-mark">JP</span>
+      <span class="brand-name">JobPilot</span>
+    </div>
+    <nav class="nav-group">
+      <span class="nav-label">工作</span>
+      <button class="nav-item active" data-tab="workbench" aria-current="page">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span>工作台</span>
+      </button>
+      <button class="nav-item" data-tab="pool">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <span>岗位池</span>
+      </button>
+      <button class="nav-item" data-tab="monitor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span>监测执行</span>
+      </button>
     </nav>
-    <div class="foot" id="hc"></div>
+    <nav class="nav-group">
+      <span class="nav-label">系统</span>
+      <button class="nav-item" data-tab="config">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 7 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 2.6 15H2a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4 7a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6V4a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 17 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 21.4 9H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>配置</span>
+      </button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="foot" id="hc"></div>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换暗色模式">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <span>暗色模式</span>
+      </button>
+    </div>
   </aside>
 
   <main class="content">
     <!-- ===== 工作台 ===== -->
     <section id="tab-workbench" class="tab-panel active">
-      <h2 class="tab-head">工作台</h2>
-
-      <div class="stats">
-        <div class="stat accent"><div class="n" id="statTotal">0</div><div class="l">采集总数</div></div>
-        <div class="stat"><div class="n" id="statApproved">0</div><div class="l">评分通过</div></div>
-        <div class="stat"><div class="n" id="statApplied">0</div><div class="l">今日已投</div><div class="sub" id="statDaily">0 / 30</div></div>
-        <div class="stat"><div class="n" id="statPending">0</div><div class="l">待处理</div></div>
+      <!-- 页头：左对齐小标题 + 主操作（Linear 风格，非商店式大 hero） -->
+      <div class="page-head reveal">
+        <div>
+          <h1>工作台</h1>
+          <p class="page-sub">采集 · 评分 · 投递 · 监测，一站式自动求职</p>
+        </div>
+        <button id="btnFull">开始全流程</button>
       </div>
 
-      <div class="card">
-        <div class="row row-between">
-          <div class="row">
-            <button id="btnFull">▶ 全流程</button>
-            <button id="btnCollect" class="ghost">采集</button>
-            <button id="btnScore" class="ghost">评分</button>
-            <button id="btnApply" class="ghost">投递</button>
-            <button id="btnMonitor" class="ghost">🔍 监测</button>
-            <span id="collectOnlyHint" class="muted" style="display:none;color:#f59e0b">⚠ 智联招聘仅支持采集，请到「岗位池」点「去投递 ↗」手动投递</span>
-            <span id="state" class="muted"></span>
-          </div>
-          <div class="row">
-            <span class="muted">当前平台</span>
-            <div id="platSwitch" class="plat-switch"></div>
-          </div>
+      <!-- 工具条卡片：平台切换 + 四个动作（紧凑排布） -->
+      <div class="card reveal">
+        <div class="toolbar">
+          <span class="plat-label">当前平台</span>
+          <div id="platSwitch" class="plat-switch"></div>
+          <div class="spacer"></div>
+          <button id="btnCollect" class="ghost">采集</button>
+          <button id="btnScore" class="ghost">评分</button>
+          <button id="btnApply" class="ghost">投递</button>
+          <button id="btnMonitor" class="ghost">监测</button>
+          <span id="collectOnlyHint" class="muted" style="display:none;color:var(--warn)">智联仅支持采集，投递请到「岗位池」手动</span>
+          <span id="state" class="muted"></span>
         </div>
       </div>
 
-      <div class="card">
+      <div class="stats reveal">
+        <div class="stat accent"><div class="n" id="statTotal">0</div><div class="l">采集总数</div><svg class="spark" id="sparkTotal" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"></svg></div>
+        <div class="stat"><div class="n" id="statApproved">0</div><div class="l">评分通过</div><svg class="spark" id="sparkApproved" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"></svg></div>
+        <div class="stat"><div class="n" id="statApplied">0</div><div class="l">今日已投</div><div class="sub" id="statDaily">0 / 30</div><svg class="spark" id="sparkApplied" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"></svg></div>
+        <div class="stat"><div class="n" id="statPending">0</div><div class="l">待处理</div><svg class="spark" id="sparkPending" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true"></svg></div>
+      </div>
+
+      <div class="card reveal">
         <div class="row row-between" style="margin-bottom:10px">
-          <h3 style="margin:0">运行进度</h3>
+          <h2 style="margin:0">运行进度</h2>
           <div class="row">
             <button id="btnPause" class="ghost" disabled>暂停</button>
             <span id="runBadge" class="badge b-new">空闲</span>
@@ -177,8 +365,8 @@
             <span id="progPhase" class="muted"></span>
             <span id="progCount" class="muted"></span>
           </div>
-          <div style="background:#e5e7eb;border-radius:var(--r-sm);height:14px;overflow:hidden">
-            <div id="progBar" style="height:100%;width:0%;background:var(--primary);transition:width .4s"></div>
+          <div style="background:var(--prog-track);border-radius:var(--r-sm);height:14px;overflow:hidden">
+            <div id="progBar" style="height:100%;width:100%;transform:scaleX(0);transform-origin:left;background:var(--primary);transition:transform .4s"></div>
           </div>
           <div id="progLabel" class="muted" style="margin-top:6px"></div>
         </div>
@@ -192,17 +380,17 @@
           <span class="muted" id="monInfo"></span>
         </div>
         <div id="applyBlockedAlert" class="alert-danger">
-          <span><span class="ico">⚠️</span><span id="applyBlockedText">投递被 51job 拦截</span></span>
+          <span><span id="applyBlockedText">投递被 51job 拦截</span></span>
           <button id="btnDismissBlocked" class="ghost">知道了</button>
         </div>
         <div id="scoreFailedAlert" class="alert-danger">
-          <span><span class="ico">⚠️</span><span id="scoreFailedText">评分失败</span></span>
+          <span><span id="scoreFailedText">评分失败</span></span>
           <button id="btnDismissScore" class="ghost">知道了</button>
         </div>
       </div>
 
-      <div class="card">
-        <h3 style="margin:0 0 8px">运行日志</h3>
+      <div class="card reveal">
+        <h2 style="margin:0 0 8px">运行日志</h2>
         <pre id="log"></pre>
       </div>
     </section>
@@ -211,7 +399,7 @@
     <section id="tab-pool" class="tab-panel">
       <h2 class="tab-head">岗位池</h2>
       <div id="poolTip" class="tip-info">
-        💡 <b>智联招聘不支持自动投递</b>（平台反爬限制）。已为您采集好岗位：<b>点下方每行的「去投递 ↗」</b>会在新标签页打开智联岗位详情页，登录后点页面里的「立即申请」即可手动完成投递。
+        <b>智联招聘不支持自动投递</b>（平台反爬限制）。已为您采集好岗位：<b>点下方每行的「去投递 ↗」</b>会在新标签页打开智联岗位详情页，登录后点页面里的「立即申请」即可手动完成投递。
       </div>
       <div class="card">
         <div class="row row-between" style="margin-bottom:8px">
@@ -232,10 +420,12 @@
             </select>
           </div>
         </div>
+        <div class="table-scroll">
         <table>
           <thead><tr><th>标题</th><th>公司</th><th>城市</th><th>薪资</th><th>评分</th><th>状态</th><th>操作</th></tr></thead>
           <tbody id="jobs"></tbody>
         </table>
+        </div>
         <p class="muted" style="margin:8px 0 0">「操作」列：点 <b>去投递 ↗ / 直达 ↗</b> 在新标签页打开该岗位的原始页面（可查看 JD 详情并手动投递）。建议筛选状态 new / approved 后逐个处理。</p>
         <div class="legend">
           <span class="badge b-new">new 未处理</span>
@@ -256,10 +446,12 @@
           <h3 style="margin:0">HR 互动监测</h3>
           <span class="muted" id="hrCount"></span>
         </div>
+        <div class="table-scroll">
         <table>
           <thead><tr><th>公司</th><th>岗位</th><th>HR</th><th>状态</th><th>活跃</th><th>最近</th><th>直达</th><th>回复</th></tr></thead>
           <tbody id="hr"></tbody>
         </table>
+        </div>
         <p class="muted" style="margin:8px 0 0">状态说明：邀面试=面试邀请（重点）；回复=HR 有聊天活跃；已查阅/感兴趣=HR 看过简历。聊天原文无法自动读取，点「直达」在 51job 内查看/回复。</p>
       </div>
 
@@ -276,7 +468,7 @@
               <button id="btnCopyDraft" class="ghost">复制</button>
               <span id="draftMsg" class="muted"></span>
             </div>
-            <textarea id="draftOut" rows="4" readonly style="width:100%;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:var(--r-md);font-size:13px;background:#f8fafc"></textarea>
+            <textarea id="draftOut" rows="4" readonly style="width:100%;margin-top:8px;padding:7px;border:1px solid var(--line);border-radius:var(--r-md);font-size:13px;background:var(--input-bg)"></textarea>
           </div>
         </div>
       </div>
@@ -366,6 +558,27 @@
 const $ = s => document.querySelector(s);
 const api = (p, opt) => fetch(p, opt).then(r => r.json());
 
+// 暗色模式：一键切换 + localStorage 持久化 + 跟随系统偏好
+const Theme = {
+  key: 'jobpilot-theme',
+  iconDark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+  iconLight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  set(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    const btn = document.getElementById('themeToggle');
+    if (btn) btn.innerHTML = (t === 'dark' ? this.iconLight : this.iconDark) + '<span>' + (t === 'dark' ? '亮色模式' : '暗色模式') + '</span>';
+    try { localStorage.setItem(this.key, t); } catch (e) {}
+  },
+  init() {
+    let t = 'light';
+    try {
+      t = localStorage.getItem(this.key) ||
+          (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    } catch (e) {}
+    this.set(t);
+  }
+};
+
 // 左侧 tab 切换
 function switchTab(name) {
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
@@ -390,7 +603,7 @@ async function loadHr() {
     const tb = $('#hr'); tb.innerHTML = '';
     $('#hrCount').textContent = rows && rows.length ? `共 ${rows.length} 个申请项` : '';
     if (!rows || !rows.length) {
-      tb.innerHTML = '<tr><td colspan="8" class="empty-state"><span class="ico">🔍</span>暂无监测数据，点工作台「监测」开始。</td></tr>';
+      tb.innerHTML = '<tr><td colspan="8" class="empty-state">暂无监测数据，点工作台「监测」开始。</td></tr>';
       return;
     }
     for (const r of rows) {
@@ -448,7 +661,7 @@ async function loadJobs() {
   const tb = $('#jobs'); tb.innerHTML = '';
   if (!jobs || !jobs.length) {
     tb.innerHTML = `<tr><td colspan="7" class="empty-state">
-      <span class="ico">📋</span>还没有采集到岗位。<br>
+      还没有采集到岗位。<br>
       请先在 JobPilot 的 Chrome 窗口（端口 9223）登录对应平台，然后点工作台「采集」。<br>
       若 Chrome 已登录但仍为空，说明后端服务已退出，请重新双击 launch.bat 启动。
     </td></tr>`;
@@ -473,6 +686,25 @@ async function loadJobs() {
   }
 }
 
+// 统计卡微型趋势 sparkline：本地滚动历史（后端无时序接口）
+const sparkHistory = { total:[], approved:[], applied:[], pending:[] };
+function pushSpark(key, val) {
+  const h = sparkHistory[key]; h.push(val);
+  if (h.length > 24) h.shift();
+}
+function renderSpark(key, elId) {
+  const h = sparkHistory[key], el = document.getElementById('spark' + elId);
+  if (!el) return;
+  if (h.length < 2) { el.innerHTML = ''; return; }
+  const W = 100, H = 28, pad = 3;
+  const min = Math.min(...h), max = Math.max(...h), range = (max - min) || 1;
+  const step = W / (h.length - 1);
+  const pts = h.map((v, i) => [i * step, H - pad - ((v - min) / range) * (H - pad * 2)]);
+  const line = pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const area = '0,' + H + ' ' + line + ' ' + W + ',' + H;
+  el.innerHTML = '<polygon class="fill" points="' + area + '"></polygon><polyline class="line" points="' + line + '"></polyline>';
+}
+
 // 工作台统计卡片：聚合各平台岗位计数
 async function updateStats(s) {
   const plats = Array.from(document.querySelectorAll('#platform option')).map(o => o.value);
@@ -492,6 +724,10 @@ async function updateStats(s) {
   $('#statApplied').textContent = s.today_applied ?? 0;
   $('#statPending').textContent = pending;
   $('#statDaily').textContent = (s.today_applied ?? 0) + ' / ' + (s.daily_limit ?? 30);
+  pushSpark('total', total); pushSpark('approved', approved);
+  pushSpark('applied', s.today_applied ?? 0); pushSpark('pending', pending);
+  renderSpark('total', 'Total'); renderSpark('approved', 'Approved');
+  renderSpark('applied', 'Applied'); renderSpark('pending', 'Pending');
 }
 
 // OpenAI 兼容服务商预设：选服务商自动填接口地址 + 默认模型，也可自定义手填
@@ -718,7 +954,7 @@ async function poll() {
     if (s.paused) { badge.textContent = '已暂停'; badge.className = 'badge b-new'; }
     else { badge.textContent = '运行中'; badge.className = 'badge b-applied'; }
     btnPause.disabled = false;
-    btnPause.textContent = s.paused ? '▶ 继续' : '⏸ 暂停';
+    btnPause.textContent = s.paused ? '继续' : '暂停';
   } else {
     badge.textContent = '空闲'; badge.className = 'badge b-new';
     btnPause.disabled = true; btnPause.textContent = '暂停';
@@ -729,7 +965,7 @@ async function poll() {
   if (s.running && prog.state === 'running' && prog.total > 0) {
     pw.style.display = 'block'; pn.style.display = 'none';
     const pct = prog.total ? Math.round(prog.current / prog.total * 100) : 0;
-    $('#progBar').style.width = pct + '%';
+    $('#progBar').style.transform = 'scaleX(' + (pct/100) + ')';
     $('#progPhase').textContent = PHASE_NAME[prog.phase] || prog.phase || '';
     $('#progCount').textContent = prog.current + ' / ' + prog.total;
     $('#progLabel').textContent = prog.label || '';
@@ -823,13 +1059,23 @@ $('#btnCopyDraft').onclick = () => {
 document.querySelectorAll('.nav-item').forEach(b => {
   b.onclick = () => switchTab(b.dataset.tab);
 });
+document.getElementById('themeToggle').onclick = () => {
+  Theme.set(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+};
 
 (async () => {
+  Theme.init();
   await refreshHealth(); buildPlatformSwitch();
   await loadConfig(); await loadJobs();
   updateCollectOnlyHint(); await poll();
   setInterval(refreshHealth, 8000);
 })();
+
+// 滚动渐显（苹果式 calm motion）：仅作用于默认可见的工作台元素
+const _io = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); _io.unobserve(e.target); } });
+}, { threshold:.12 });
+document.querySelectorAll('.reveal').forEach(el => _io.observe(el));
 </script>
 </body>
 </html>

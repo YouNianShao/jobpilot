@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata as _md
 import json
 import threading
 import time
@@ -21,6 +22,19 @@ _MONITOR_STATE: dict[str, Any] = {"running": False, "last_run": None, "next_run"
 
 HERE = Path(__file__).resolve().parent
 DASHBOARD = HERE / "dashboard.html"
+
+
+def _app_version() -> str:
+    """读取应用版本：优先包元数据，回退到 pyproject.toml，避免与单文件前端漂移。"""
+    try:
+        return _md.version("jobpilot")
+    except Exception:  # noqa: BLE001
+        try:
+            txt = (HERE.parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+            m = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', txt, re.M)
+            return m.group(1) if m else "0.0.0"
+        except Exception:  # noqa: BLE001
+            return "0.0.0"
 
 # 后台任务状态（线程安全）
 _TASK: dict[str, Any] = {"running": False, "last": None, "log": []}
@@ -100,7 +114,8 @@ class Handler(BaseHTTPRequestHandler):
         path = p.path
         if path in ("/", "/index.html"):
             if DASHBOARD.exists():
-                self._send(200, DASHBOARD.read_bytes(), "text/html")
+                html = DASHBOARD.read_bytes().decode("utf-8").replace("{{VERSION}}", _app_version())
+                self._send(200, html.encode("utf-8"), "text/html")
             else:
                 self._send(404, {"error": "dashboard.html 缺失"})
             return
