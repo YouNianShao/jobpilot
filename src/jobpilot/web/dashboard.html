@@ -530,7 +530,7 @@
       <div class="card">
         <h3 style="margin:0 0 10px">投递节奏（防反爬）</h3>
         <div class="grid2">
-          <label>每日上限<br><input id="dailyLimit" type="number" value="30" style="width:100%"></label>
+          <label>每日上限<br><input id="cfgDailyLimit" type="number" value="30" style="width:100%"></label>
           <label>间隔下限(秒)<br><input id="intervalMin" type="number" value="60" style="width:100%"></label>
           <label>间隔上限(秒)<br><input id="intervalMax" type="number" value="180" style="width:100%"></label>
         </div>
@@ -791,7 +791,7 @@ async function loadConfig() {
   $('#keywords').value = (p.keywords || []).join(',');
   // 投递节奏
   const th = c.throttle || {};
-  $('#dailyLimit').value = th.daily_limit ?? 30;
+  $('#cfgDailyLimit').value = th.daily_limit ?? 30;
   $('#intervalMin').value = th.interval_min ?? 60;
   $('#intervalMax').value = th.interval_max ?? 180;
   // 监测
@@ -820,7 +820,7 @@ async function saveConfig() {
       deal_breakers: $('#dealBreakers').value.split(',').map(s => s.trim()).filter(Boolean),
     },
     throttle: {
-      daily_limit: num('dailyLimit', 30),
+      daily_limit: num('cfgDailyLimit', 30),
       interval_min: num('intervalMin', 60),
       interval_max: num('intervalMax', 180),
     },
