@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 _pause_event = threading.Event()
 _pause_event.set()  # 默认未暂停（事件置位=放行）
@@ -30,3 +31,16 @@ def is_paused() -> bool:
 def yield_point() -> None:
     """在安全点调用：若已暂停则阻塞，直至继续。"""
     _pause_event.wait()
+
+
+def sleep_checked(seconds: float) -> None:
+    """可被暂停打断的分段睡眠：每 1 秒经过一个 yield_point。
+
+    用于投递间隔/退避等待——暂停时不会傻等整段时长。
+    """
+    remaining = float(seconds)
+    while remaining > 0:
+        yield_point()
+        step = min(1.0, remaining)
+        time.sleep(step)
+        remaining -= step

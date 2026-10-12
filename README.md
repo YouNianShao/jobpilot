@@ -17,6 +17,47 @@
 - **Web 仪表盘**：工作台（统计卡片 / 运行控制 / 进度 / 日志）、岗位池（筛选 + 直达投递链接）、监测执行、配置，4-tab 单文件前端
 - **安全护栏**：评分失败 / 投递被拦截红色横幅警示；协作式暂停；每日投递上限
 
+## 风控与安全
+
+自动投递是账号风险最高的动作，JobPilot 在投递链路上加了多层护栏（`src/jobpilot/safety.py`）：
+
+| 护栏 | 作用 | 配置项 |
+|---|---|---|
+| 投递时间窗 | 只在设定时间段内自动投递，夜间不动 | `throttle.send_windows` |
+| 随机休息日 | 按概率整天不投递，模拟真人作息 | `throttle.day_off_probability` |
+| 每日上限 | 当天成功投递数达到上限即停 | `throttle.daily_limit` |
+| 随机间隔 | 两次投递之间随机等待 | `throttle.interval_min/max` |
+| 渐进退避 | 连续失败逐级拉长等待（60→120→300s） | 自动 |
+| 风控识别 | 检测验证码/限流/拦截页面并立即停止 | `safety.detect_risk` |
+| 风险冷却锁 | 命中风控后锁定一段时间，跨进程生效 | `safety.risk_lock_minutes` |
+
+风控冷却锁写在 `data/safety_lock.json`，CLI / Web / 定时监测共享；冷却期内会跳过自动投递并给出剩余分钟数。需要临时跳过全部护栏时用 `jobpilot --force`（谨慎）。
+
+## 投递流程与人工确认
+
+默认开启**人工确认门**（`confirm.required: true`）：
+
+1. `采集` → 岗位入库（跨平台按「公司 + 标题」去重）
+2. `评分` → 预筛 + AI 评分，通过者进入 **待确认**（`pending_confirm`）
+3. `招呼语`（可选）→ 为待确认/已通过岗位生成 AI 招呼语
+4. **人工确认** → 在工作台「待确认投递」区逐个/批量确认，或 `jobpilot --mode confirm --platform 51job`
+5. `投递` → 只投已确认（`approved`）的岗位，受时间窗/额度/风控冷却约束
+
+如果关闭确认门（`confirm.required: false`），评分通过后直接进入可投递状态。`全流程` 在开启确认门时会在评分后停下，等你在仪表盘确认。
+
+## 指令
+
+```bash
+jobpilot --mode collect  --platform 51job     # 采集
+jobpilot --mode score    --platform 51job     # 评分（预筛 + AI）
+jobpilot --mode greet    --platform 51job     # 生成招呼语
+jobpilot --mode confirm  --platform 51job     # 确认全部待确认岗位
+jobpilot --mode confirm  --platform 51job --reject   # 全部拒绝
+jobpilot --mode apply    --platform 51job     # 投递已确认岗位
+jobpilot --mode full     --platform 51job     # 全流程（确认门开启时停在待确认）
+jobpilot --mode monitor                        # HR 监测（默认 51job）
+```
+
 ## 快速开始
 
 要求：Windows + Python 3.10+ + 已安装 Chrome
@@ -38,6 +79,8 @@ launch.bat
 ```
 
 浏览器访问 `http://127.0.0.1:8699` 打开仪表盘。
+
+> **启动方式**：`launch.bat` 现在是**静默启动**——只负责拉起看板与浏览器代理，随后自身退出，不再弹出第二个控制台窗口（Node 代理以无窗口方式运行，日志见 `data/proxy.log`，应用日志见 `data/jobpilot.log`）。停止请双击 `stop.bat`（停止看板与代理；Chrome 调试实例保留登录态，可自行关闭）。需要看控制台输出调试时，用 `.venv\Scripts\python.exe -m jobpilot.gui --browser` 直接运行。
 
 ## 配置说明
 

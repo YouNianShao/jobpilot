@@ -9,6 +9,7 @@ from jobpilot.browser import Browser
 from jobpilot.control import yield_point
 from jobpilot.db import get_conn, insert_job, job_exists
 from jobpilot.platforms.base import BaseAdapter
+from jobpilot.safety import PlatformRiskError, detect_page_risk
 
 # 猎聘搜索页（无需登录即可访问）。city 用区号式（实测 020→广州）；
 # 若过滤不准，请在 config.yaml 的 platforms.liepin.cities 直接用正确码。
@@ -88,6 +89,7 @@ JS_APPLY_RESULT = r"""
 class LiepinAdapter(BaseAdapter):
     key = "liepin"
     name = "猎聘"
+    capabilities = frozenset({"collect", "apply"})
 
     # ---------- 采集 ----------
     def collect(self, cfg: dict, browser: Browser) -> int:
@@ -119,8 +121,10 @@ class LiepinAdapter(BaseAdapter):
                         if self._needs_login(browser, tid):
                             print("[liepin] 搜索页跳登录，请确认浏览器登录态。")
                             return new_count
-                        raw = browser.evaluate(tid, JS_LIST)
-                        jobs = self._parse_json(raw) or []
+                        risk = detect_page_risk(browser, tid)
+                        if risk and risk != "login_required":
+                            raise PlatformRiskError(risk)
+                        jobs = self.read_list(browser, tid, JS_LIST, label="猎聘岗位列表")
                         if not jobs:
                             break  # 本关键词已无更多结果
                         for j in jobs:
@@ -142,8 +146,8 @@ class LiepinAdapter(BaseAdapter):
                                 "url": j.get("url", ""),
                                 "search_url": url,
                             }
-                            insert_job(conn, rec)
-                            new_count += 1
+                            if insert_job(conn, rec):
+                                new_count += 1
         finally:
             if tid:
                 browser.close_tab(tid)
@@ -164,6 +168,9 @@ class LiepinAdapter(BaseAdapter):
             browser.wait_for_load(tid, 8)
             if self._needs_login(browser, tid):
                 return "need_login"  # 需在驱动浏览器内登录猎聘
+            risk = detect_page_risk(browser, tid)
+            if risk and risk != "login_required":
+                raise PlatformRiskError(risk)
             browser.scroll(tid, y=600)
             time.sleep(1)
             clicked = browser.evaluate(tid, JS_CLICK_APPLY)

@@ -385,6 +385,18 @@
           <span><span id="scoreFailedText">评分失败</span></span>
           <button id="btnDismissScore" class="ghost">知道了</button>
         </div>
+
+        <div id="confirmPanel" class="card" style="display:none;margin-top:12px">
+          <div class="row row-between" style="margin-bottom:8px">
+            <h3 style="margin:0">待确认投递（<span id="confirmCount">0</span>）</h3>
+            <div class="row">
+              <button id="btnConfirmAll">全部确认投递</button>
+              <button id="btnRejectAll" class="ghost">全部拒绝</button>
+              <span id="confirmMsg" class="muted"></span>
+            </div>
+          </div>
+          <div id="confirmList" class="muted" style="font-size:13px;line-height:1.7"></div>
+        </div>
       </div>
 
       <div class="card reveal">
@@ -398,6 +410,7 @@
               <option value="zhaopin">智联招聘</option>
             </select>
             <select id="recentFilter">
+              <option value="pending_confirm">待确认</option>
               <option value="">全部状态</option>
               <option value="new">未处理</option>
               <option value="scored">已评分</option>
@@ -442,6 +455,7 @@
               <option value="zhaopin">智联招聘</option>
             </select>
             <select id="filter">
+              <option value="pending_confirm">待确认</option>
               <option value="">全部状态</option>
               <option value="new">未处理</option>
               <option value="scored">已评分</option>
@@ -539,6 +553,8 @@
             <datalist id="modelList"></datalist>
           </label>
           <label>匹配阈值<br><input id="threshold" type="number" value="60" style="width:100%"></label>
+          <label>人工确认门<br><span class="switch-line"><input type="checkbox" id="confirmRequired"> 评分通过后需人工确认再投递</span></label>
+          <label>AI 招呼语<br><span class="switch-line"><input type="checkbox" id="greetingEnabled"> 自动生成招呼语</span></label>
         </div>
         <p class="muted" style="margin:10px 0 0;font-size:12px">支持任何 OpenAI 兼容接口：选服务商自动填地址与默认模型，或选「自定义」手填。模型名可直接输入，具体名称以各家官方文档为准。</p>
       </div>
@@ -693,6 +709,52 @@ async function genDraft() {
   $('#draftOut').value = r.draft || '';
 }
 
+function renderConfirm(s) {
+  const panel = $('#confirmPanel');
+  if (!panel) return;
+  const list = s.pending_confirm || [];
+  if (!list.length) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  $('#confirmCount').textContent = s.pending_confirm_count ?? list.length;
+  const box = $('#confirmList'); box.innerHTML = '';
+  window._greetingCache = {};
+  for (const j of list) {
+    window._greetingCache[j.id] = (j.greeting || '').trim();
+    const div = document.createElement('div');
+    div.style.borderTop = '1px solid var(--line)';
+    div.style.padding = '8px 0';
+    const head = document.createElement('div');
+    head.innerHTML = '<b>' + (j.title || '') + '</b> · ' + (j.company || '')
+      + ' <span class="muted">' + (j.salary || '') + '</span> <span class="badge b-approved">' + (j.score ?? '-') + '</span>';
+    div.appendChild(head);
+    const g = window._greetingCache[j.id];
+    if (g) {
+      const gd = document.createElement('div');
+      gd.className = 'muted'; gd.style.marginTop = '4px'; gd.textContent = '招呼语：' + g;
+      div.appendChild(gd);
+    }
+    const ops = document.createElement('div'); ops.style.marginTop = '6px';
+    const bc = document.createElement('button'); bc.textContent = '确认投递'; bc.onclick = () => jobDecision('confirm', j.id);
+    const br = document.createElement('button'); br.textContent = '拒绝'; br.className = 'ghost'; br.onclick = () => jobDecision('reject', j.id);
+    const cp = document.createElement('button'); cp.textContent = '复制招呼语'; cp.className = 'ghost';
+    cp.onclick = () => { const t = window._greetingCache[j.id] || ''; if (t) navigator.clipboard.writeText(t).then(() => { $('#confirmMsg').textContent = '招呼语已复制'; }); };
+    ops.appendChild(bc); ops.appendChild(document.createTextNode(' '));
+    ops.appendChild(br); ops.appendChild(document.createTextNode(' '));
+    ops.appendChild(cp);
+    div.appendChild(ops);
+    box.appendChild(div);
+  }
+}
+
+async function jobDecision(kind, jobId) {
+  const pf = $('#platform').value;
+  const path = kind === 'confirm' ? '/api/jobs/confirm' : '/api/jobs/reject';
+  const body = jobId ? { platform: pf, job_ids: [jobId] } : { platform: pf };
+  const r = await api(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  $('#confirmMsg').textContent = (r && r.ok) ? (kind === 'confirm' ? '已确认' : '已拒绝') : ((r && r.error) || '操作失败');
+  poll();
+}
+
 async function loadJobs() {
   const f = $('#filter').value;
   const pf = $('#platform').value;
@@ -758,7 +820,7 @@ function renderSpark(key, elId) {
 
 // 工作台：最近采集岗位一览（复用 updateStats 已聚合的数据，不额外请求）
 const PLAT_NAME = { '51job': '前程无忧', 'liepin': '猎聘', 'zhaopin': '智联' };
-const STATUS_NAME = { new:'未处理', scored:'已评分', approved:'通过', applied:'已投递', unsupported:'不支持', rejected:'被拒' };
+const STATUS_NAME = { new:'未处理', scored:'已评分', filtered:'未通过', pending_confirm:'待确认', approved:'通过', applied:'已投递', already:'已投递', unsupported:'不支持', need_resume:'待补简历', rejected:'被拒' };
 let recentJobsAll = [];
 function jobTs(j) { const t = Date.parse((j.created_at || '').replace(' ', 'T')); return isNaN(t) ? 0 : t; }
 function renderRecentJobs() {
@@ -876,6 +938,8 @@ async function loadConfig() {
   $('#aiProvider').value = matchProvider(c.ai?.base_url || '');
   buildModelList($('#aiProvider').value);
   $('#threshold').value = c.scoring?.threshold ?? 60;
+  $('#confirmRequired').checked = c.confirm?.required !== false;
+  $('#greetingEnabled').checked = c.greeting?.enabled !== false;
   // 简历与硬性过滤
   const prof = c.profile || {};
   $('#resumePath').value = prof.resume_path || '';
@@ -913,6 +977,8 @@ async function saveConfig() {
     ai: { model: $('#model').value.trim(), base_url: $('#baseUrl').value.trim() },
     // 防御：api_key 框显示的是掩码，未改则不发送，避免覆盖真值
     scoring: { threshold: num('threshold', 60) },
+    confirm: { required: $('#confirmRequired').checked },
+    greeting: { enabled: $('#greetingEnabled').checked },
     profile: {
       resume_path: $('#resumePath').value.trim(),
       salary_min: num('salaryMin', 0),
@@ -940,7 +1006,9 @@ async function saveConfig() {
     } },
   };
   const rawKey = $('#apiKey').value.trim();
-  if (rawKey && !rawKey.includes('*')) body.ai.api_key = rawKey;  // 仅当用户输入了完整 key 才更新  await api('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (rawKey && !rawKey.includes('*')) body.ai.api_key = rawKey;  // 仅当用户输入了完整 key 才更新
+  const r = await api('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (r && r.error) { $('#saveMsg').textContent = '保存失败: ' + r.error; return; }
   $('#saveMsg').textContent = '已保存 ✓';
   setTimeout(() => { if ($('#saveMsg').textContent === '已保存 ✓') $('#saveMsg').textContent = ''; }, 2000);
   loadConfig();  // 重新拉取，刷新平台启用状态到切换器
@@ -1114,6 +1182,7 @@ async function poll() {
   await updateStats(s);
   updateApplyBlocked(s);
   updateScoreFailed(s);
+  renderConfirm(s);
   setTimeout(poll, 3000);
 }
 
@@ -1143,6 +1212,8 @@ $('#btnDismissScore').onclick = () => {
   scoreFailedDismissed = true;
   $('#scoreFailedAlert').classList.remove('show');
 };
+$('#btnConfirmAll').onclick = () => jobDecision('confirm', null);
+$('#btnRejectAll').onclick = () => jobDecision('reject', null);
 $('#btnDraft').onclick = genDraft;
 $('#btnCopyDraft').onclick = () => {
   const t = $('#draftOut').value;

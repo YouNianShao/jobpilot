@@ -20,9 +20,46 @@ throttle:
   daily_limit: 30
   interval_min: 60
   interval_max: 180
+  # 只在时间段内自动投递；留空 [] 表示不限制
+  send_windows: ["08:00-22:00"]
+  # 每天按概率整体休息，模拟真人作息，降低被风控概率
+  day_off_probability: 0.05
+  # 连续 N 次投递未成功即锁定该平台冷却
+  max_consecutive_blocked: 3
+
+safety:
+  # 命中验证码/限流/拦截后的冷却分钟数（跨进程持久化）
+  risk_lock_minutes: 30
+  # 采集/投递时探测风控页面并立即停止（fail-closed）
+  detect_risk: true
+
+confirm:
+  # 评分通过后先进入"待确认"，人工确认后才允许自动投递
+  required: true
+
+greeting:
+  # 为待确认/已通过岗位生成 AI 招呼语
+  enabled: true
+
+monitor:
+  enabled: true
+  auto: false
+  interval_minutes: 30
+  working_hours: 09:00-21:00
+  draft_reply: true
+  # 已开启 HR 监测的平台；目前仅 51job 经过实机验证
+  enabled_platforms: [51job]
+  # 其它平台的监测入口（best-effort，需自行在真实环境确认）
+  urls:
+    51job: https://i.51job.com/userset/my_apply.php?lang=c
+    liepin: ""
+    zhaopin: ""
 
 scoring:
   threshold: 60
+  timeout_seconds: 30
+  max_attempts: 2
+  concurrency: 1
 
 profile:
   resume_path: E:/JobPilot/data/resume.md

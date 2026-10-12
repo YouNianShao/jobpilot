@@ -10,6 +10,7 @@ from jobpilot.browser import Browser
 from jobpilot.control import yield_point
 from jobpilot.db import get_conn, insert_job, job_exists
 from jobpilot.platforms.base import BaseAdapter
+from jobpilot.safety import PlatformRiskError, detect_page_risk
 
 # 51job 新版搜索页（SPA）。jobArea 为城市码，keyword 为关键词。
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={city}&keyword={kw}&searchType=2&keywordType=&page={page}"
@@ -138,6 +139,7 @@ JS_CLOSE_DIALOG = r"""
 class Job51Adapter(BaseAdapter):
     key = "51job"
     name = "前程无忧"
+    capabilities = frozenset({"collect", "apply", "monitor"})
 
     # ---------- 采集 ----------
     def collect(self, cfg: dict, browser: Browser) -> int:
@@ -170,8 +172,10 @@ class Job51Adapter(BaseAdapter):
                         if self._needs_login(browser, tid):
                             print("[51job] 登录态失效，请重新登录后重试。")
                             return new_count
-                        raw = browser.evaluate(tid, JS_LIST)
-                        jobs = self._parse_json(raw) or []
+                        risk = detect_page_risk(browser, tid)
+                        if risk and risk != "login_required":
+                            raise PlatformRiskError(risk)
+                        jobs = self.read_list(browser, tid, JS_LIST, label="51job 岗位列表")
                         if not jobs:
                             break
                         for j in jobs:
@@ -200,8 +204,8 @@ class Job51Adapter(BaseAdapter):
                                 "url": jurl,
                                 "search_url": url,
                             }
-                            insert_job(conn, rec)
-                            new_count += 1
+                            if insert_job(conn, rec):
+                                new_count += 1
         finally:
             if tid:
                 browser.close_tab(tid)
@@ -246,6 +250,9 @@ class Job51Adapter(BaseAdapter):
                 browser.wait_for_load(tid, 8)
                 if self._needs_login(browser, tid):
                     return "unsupported"  # 登录态失效
+                risk = detect_page_risk(browser, tid)
+                if risk and risk != "login_required":
+                    raise PlatformRiskError(risk)
                 browser.scroll(tid, 1500); time.sleep(0.8)
                 browser.scroll(tid, 3000); time.sleep(0.8)
                 idx = None

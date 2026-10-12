@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -108,8 +109,8 @@ def _parse_apps(raw: Any) -> list[dict]:
     return []
 
 
-def run_monitor(cfg: dict[str, Any], browser: Browser, max_pages: int = 5) -> dict[str, Any]:
-    """监测 51job 已投递项目的 HR 互动，返回汇总。被 CLI / Web / 定时任务共用。"""
+def _monitor_51job(cfg: dict[str, Any], browser: Browser, max_pages: int = 5) -> dict[str, Any]:
+    """监测 51job 已投递项目的 HR 互动，返回汇总（已实机验证的路径）。"""
     monitor_cfg = cfg.get("monitor", {}) or {}
     if not monitor_cfg.get("enabled", True):
         return {"skipped": "monitor disabled"}
@@ -218,3 +219,97 @@ def draft_reply(cfg: dict[str, Any], hr_text: str, job_title: str = "", company:
 {resume[:1500] if resume else '（未配置简历，请基于岗位通用礼貌回复）'}"""
     out = generate_text(cfg, DRAFT_SYSTEM, user, temperature=0.5)
     return out or "（生成失败，请检查 AI Key 或稍后重试）"
+
+
+# --------------------------------------------------------------------------
+# 监测分派 + 其它平台的通用监测（best-effort，默认关闭）
+# --------------------------------------------------------------------------
+GENERIC_JS = r"""
+(() => {
+  const out = [];
+  const nodes = document.querySelectorAll('li, tr, .card, .item, [class*=list-item], [class*=job], [class*=msg]');
+  for (const n of nodes) {
+    const text = (n.innerText || '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 400) continue;
+    if (!/(已投递|已申请|投递成功|沟通|回复|面试|不合适|感兴趣|已查看|查看)/.test(text)) continue;
+    const a = n.querySelector('a[href]');
+    out.push({ title: text.slice(0, 80), company: '', hr_name: '', hr_title: '', salary: '',
+               activity: '', status_text: text, deeplink: a ? a.getAttribute('href') : '', app_id: '' });
+  }
+  return JSON.stringify(out);
+})()
+"""
+
+
+def _monitor_generic(cfg: dict[str, Any], browser: Browser, platform: str, max_pages: int = 5) -> dict[str, Any]:
+    """其它平台的通用 HR 监测（best-effort，选择器未经过实机验证）。
+
+    需要在 ``monitor.enabled_platforms`` 显式开启，并在 ``monitor.urls`` 填入口地址。
+    """
+    monitor_cfg = cfg.get("monitor", {}) or {}
+    url = (monitor_cfg.get("urls") or {}).get(platform) or ""
+    if not url:
+        return {"skipped": f"{platform} 未配置监测地址（monitor.urls.{platform}）"}
+    conn = get_conn()
+    tid = None
+    try:
+        tid = browser.new_tab(url)
+        if not tid:
+            return {"error": f"无法打开 {platform} 监测页"}
+        time.sleep(4)
+        browser.wait_for_load(tid, 8)
+        try:
+            from jobpilot.safety import detect_page_risk
+            kind = detect_page_risk(browser, tid)
+        except Exception:  # noqa: BLE001
+            kind = None
+        if kind == "login_required":
+            return {"error": f"{platform} 登录态失效，请重新登录后重试"}
+        if kind:
+            return {"error": f"{platform} 监测页命中风控：{kind}"}
+
+        apps = _parse_apps(browser.evaluate(tid, GENERIC_JS))
+        summary: dict[str, Any] = {"checked": len(apps), "events": {}, "updated": 0, "best_effort": True}
+        prog_start("monitor", "monitor", len(apps), "通用监测中…")
+        for i, a in enumerate(apps, 1):
+            yield_point()
+            status_text = a.get("status_text", "")
+            state, event = _detect_state(status_text)
+            app_id = "generic-" + hashlib.md5(
+                (platform + "|" + status_text[:120]).encode("utf-8")
+            ).hexdigest()[:12]
+            upsert_hr_interaction(conn, {
+                "app_id": app_id,
+                "title": a.get("title", ""),
+                "company": a.get("company", ""),
+                "hr_name": a.get("hr_name", ""),
+                "hr_title": a.get("hr_title", ""),
+                "salary": a.get("salary", ""),
+                "activity": a.get("activity", ""),
+                "hr_state": state or "",
+                "deeplink": a.get("deeplink", ""),
+                "last_event": event or "",
+                "job_id": None,
+            })
+            summary["updated"] += 1
+            if event and event in LOGGED_EVENTS:
+                summary["events"][event] = summary["events"].get(event, 0) + 1
+            prog_job(i, len(apps), a.get("title", "")[:40])
+        return summary
+    finally:
+        if tid:
+            browser.close_tab(tid)
+        conn.close()
+
+
+def run_monitor(cfg: dict[str, Any], browser: Browser, max_pages: int = 5, platform: str = "51job") -> dict[str, Any]:
+    """按平台分派 HR 监测。默认只跑 51job（已实机验证）。"""
+    monitor_cfg = cfg.get("monitor", {}) or {}
+    if not monitor_cfg.get("enabled", True):
+        return {"skipped": "monitor disabled"}
+    enabled = monitor_cfg.get("enabled_platforms") or ["51job"]
+    if platform not in enabled:
+        return {"skipped": f"{platform} 未开启监测（见 monitor.enabled_platforms）"}
+    if platform == "51job":
+        return _monitor_51job(cfg, browser, max_pages)
+    return _monitor_generic(cfg, browser, platform, max_pages)

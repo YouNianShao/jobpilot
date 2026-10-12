@@ -43,8 +43,21 @@ DEFAULTS: dict[str, Any] = {
         "daily_limit": 30,
         "interval_min": 60,
         "interval_max": 180,
+        "send_windows": ["08:00-22:00"],  # 只在时间段内自动投递；[] 表示不限制
+        "day_off_probability": 0.05,       # 每天按概率整体休息，模拟真人作息
+        "max_consecutive_blocked": 3,      # 连续 N 次投递未成功即锁定该平台冷却
     },
-    "scoring": {"threshold": 60},
+    "safety": {
+        "risk_lock_minutes": 30,  # 命中验证码/限流/拦截后的冷却分钟数
+        "detect_risk": True,      # 采集/投递时探测风控页面并 fail-closed
+    },
+    "confirm": {
+        "required": True,  # 评分通过后先进入待确认，人工确认后才允许自动投递
+    },
+    "greeting": {
+        "enabled": True,   # 为待确认/已通过岗位生成 AI 招呼语
+    },
+    "scoring": {"threshold": 60, "timeout_seconds": 30, "max_attempts": 2, "concurrency": 1},
     "profile": {
         "resume_path": "",
         "salary_min": 0,       # K/月，硬性下限，低于则预筛剔除
@@ -58,6 +71,14 @@ DEFAULTS: dict[str, Any] = {
         "interval_minutes": 30,
         "working_hours": "09:00-21:00",
         "draft_reply": True,      # 允许粘贴 HR 原话生成建议回复
+        # 已开启 HR 监测的平台；目前仅 51job 经过实机验证
+        "enabled_platforms": ["51job"],
+        # 其它平台的监测入口（best-effort，需自行在真实环境确认）
+        "urls": {
+            "51job": "https://i.51job.com/userset/my_apply.php?lang=c",
+            "liepin": "",
+            "zhaopin": "",
+        },
     },
 }
 

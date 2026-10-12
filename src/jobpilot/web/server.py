@@ -169,6 +169,13 @@ class Handler(BaseHTTPRequestHandler):
                 "SELECT created_at FROM history WHERE action='apply' AND detail='applied' "
                 "ORDER BY id DESC LIMIT 1"
             ).fetchone()
+            pending_rows = conn.execute(
+                "SELECT id, platform, title, company, salary, city, score, status, greeting, url "
+                "FROM jobs WHERE status='pending_confirm' ORDER BY score DESC LIMIT 20"
+            ).fetchall()
+            approved_count = conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status='approved'"
+            ).fetchone()[0]
             conn.close()
             last_action = None
             if last:
@@ -202,6 +209,9 @@ class Handler(BaseHTTPRequestHandler):
                     "next_run": _MONITOR_STATE["next_run"],
                 },
                 "last_action": last_action,
+                "pending_confirm": [dict(r) for r in pending_rows],
+                "pending_confirm_count": len(pending_rows),
+                "approved_count": int(approved_count or 0),
                 "recent": [
                     {"action": r["action"], "detail": r["detail"], "created_at": r["created_at"],
                      "title": r["title"], "company": r["company"]}
@@ -228,6 +238,9 @@ class Handler(BaseHTTPRequestHandler):
                 "throttle": cfg.get("throttle", {}),
                 "profile": cfg.get("profile", {}),
                 "monitor": cfg.get("monitor", {}),
+                "confirm": cfg.get("confirm", {}),
+                "greeting": cfg.get("greeting", {}),
+                "safety": cfg.get("safety", {}),
             }, nocache=True)
             return
         if path == "/api/browser_health":
@@ -298,6 +311,15 @@ class Handler(BaseHTTPRequestHandler):
         if p.path == "/api/resume":
             control.resume()
             self._send(200, {"ok": True, "paused": False})
+            return
+        if p.path in ("/api/jobs/confirm", "/api/jobs/reject"):
+            from jobpilot.confirm import approve, reject
+            cfg = load_config()
+            platform = str(body.get("platform") or "51job")
+            job_ids = [str(x) for x in (body.get("job_ids") or []) if str(x)]
+            action = approve if p.path.endswith("confirm") else reject
+            res = action(cfg, platform, job_ids=job_ids, all_pending=not job_ids)
+            self._send(200, {"ok": True, **res})
             return
         self._send(404, {"error": "not found"})
 

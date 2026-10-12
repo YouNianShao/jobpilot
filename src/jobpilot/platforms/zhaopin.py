@@ -10,6 +10,7 @@ from jobpilot.browser import Browser
 from jobpilot.control import yield_point
 from jobpilot.db import get_conn, insert_job, job_exists
 from jobpilot.platforms.base import BaseAdapter
+from jobpilot.safety import PlatformRiskError, detect_page_risk
 
 # 智联搜索页（无需登录即可访问）。city 参数（cityCode / 路径 jl 码）实测无效，
 # 搜索返回全国混合结果，因此城市过滤在 Python 侧按提取到的 city 字段做。
@@ -47,7 +48,7 @@ JS_LIST = r"""
 class ZhaopinAdapter(BaseAdapter):
     key = "zhaopin"
     name = "智联招聘"
-    collect_only = True  # 仅采集；投递被平台反爬封锁，需用户手动
+    capabilities = frozenset({"collect"})  # 仅采集；投递被平台反爬封锁，需用户手动
 
     # ---------- 采集 ----------
     def collect(self, cfg: dict, browser: Browser) -> int:
@@ -84,8 +85,10 @@ class ZhaopinAdapter(BaseAdapter):
                     if self._needs_login(browser, tid):
                         print("[zhaopin] 搜索页跳登录，请确认浏览器登录态。")
                         return new_count
-                    raw = browser.evaluate(tid, JS_LIST)
-                    jobs = self._parse_json(raw) or []
+                    risk = detect_page_risk(browser, tid)
+                    if risk and risk != "login_required":
+                        raise PlatformRiskError(risk)
+                    jobs = self.read_list(browser, tid, JS_LIST, label="智联岗位列表")
                     if not jobs:
                         break  # 本关键词已无更多结果
                     for j in jobs:
@@ -110,8 +113,8 @@ class ZhaopinAdapter(BaseAdapter):
                             "url": j.get("url", ""),
                             "search_url": page_url,
                         }
-                        insert_job(conn, rec)
-                        new_count += 1
+                        if insert_job(conn, rec):
+                            new_count += 1
         finally:
             if tid:
                 browser.close_tab(tid)
