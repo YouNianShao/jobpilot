@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobpilot"
+version = "2.0.0"
+description = "JobPilot - 多平台求职助手（采集 / 评分 / 招呼语 / 人工确认 / 投递 / 监测）"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "patchright>=1.48",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    # 读带文字层的 PDF 简历（纯 Python，无二进制依赖）；钉死版本，抽取结果随版本会有细微差别
+    "pypdf==6.20.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+export = ["openpyxl>=3.1"]
+
+[project.scripts]
+jobpilot = "jobpilot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"jobpilot.web" = ["static/*", "static/**/*"]
+"jobpilot.ai" = ["prompts/*.md"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [".venv", "data"]
+
+[tool.ruff.lint]
+# E/F/W 是基础正确性（未定义名、未使用导入…），I 管导入顺序，UP 管过时写法，B 抓可疑写法。
+# 长行不卡（E501 交给编辑器）—— lint 应该拦真问题，不是拦排版。
+select = ["E", "F", "W", "I", "UP", "B"]
+# E501：长行交给编辑器；UP042：Status 故意同时继承 str+Enum，换 StrEnum 会改 str() 的行为
+ignore = ["E501", "UP042"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

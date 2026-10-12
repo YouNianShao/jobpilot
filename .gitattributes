@@ -1,0 +1,5 @@
+# Windows 脚本必须是 CRLF：cmd / PowerShell 读 LF 的 .bat 会出怪问题
+* text=auto
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.vbs text eol=crlf

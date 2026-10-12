@@ -1,0 +1,1 @@
+(function(){ const b=document.querySelector('[data-view="config"]'); if(b) b.click(); return 'clicked config'; })()

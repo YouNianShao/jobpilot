@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JobPilot · 求职领航</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236e8bff'/><path d='M20.5 9 9 16.4l11.5 7.4z' fill='white'/></svg>">
+<!-- 主题要在首帧之前定：app.js 是 module（延后执行），等它来改 data-theme 时，浅色用户已经看到一闪深色 -->
+<script>try { document.documentElement.setAttribute('data-theme', localStorage.getItem('jp-theme') || 'dark'); } catch (e) {}</script>
+<link rel="stylesheet" href="/static/css/app.css">
+<svg style="display:none" aria-hidden="true"><defs>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="i-cog" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 2.6 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 7 2.6h.1A1.7 1.7 0 0 0 8.3 1V1a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 2.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1A1.7 1.7 0 0 0 19.4 15z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3L10.5 13.5M21 3l-6.6 18-3.9-7.5L3 9.6z"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 12h4l2 3h6l2-3h4M3 12l2.6-6.2A1 1 0 0 1 6.5 5h11a1 1 0 0 1 .9.8L21 12v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4.5 13.5H11l-1 8.5 9-12h-6.5z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.2 2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3zM12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-stack" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0zM12 16v5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 20h18M6.5 20V10M11.5 20V4M16.5 20v-7"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13h10l1-13"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+</defs></svg>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><svg viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg></div>
+      <div>
+        <div class="brand-name">Job<span>Pilot</span></div>
+        <div class="brand-sub">求职领航</div>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="nav-label">工作台</div>
+      <button class="nav-item is-active" data-view="overview"><svg><use href="#i-grid"/></svg>概览</button>
+      <button class="nav-item" data-view="jobs"><svg><use href="#i-list"/></svg>岗位池<span class="nav-badge" id="navJobsBadge"></span></button>
+      <button class="nav-item" data-view="monitor"><svg><use href="#i-chat"/></svg>监测</button>
+      <button class="nav-item" data-view="activity"><svg><use href="#i-chart"/></svg>记录</button>
+      <button class="nav-item" data-view="config"><svg><use href="#i-cog"/></svg>配置</button>
+    </nav>
+    <div class="sidebar-foot">
+      <!-- 作者主页：图标 + 用户名，点击在新标签页打开（图标是内联 SVG，不依赖外网资源） -->
+      <a class="gh-link" href="https://github.com/YouNianShao" target="_blank" rel="noopener noreferrer" title="在 GitHub 上查看作者主页">
+        <svg class="gh-mark" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="gh-text"><b>YouNianShao</b><span>GitHub · 作者主页</span></span>
+        <svg class="gh-ext" aria-hidden="true"><use href="#i-ext"/></svg>
+      </a>
+      <div class="browser-state" id="browserState">
+        <span class="dot"></span><span id="browserText">检测中…</span>
+      </div>
+      <div class="muted small" id="idleHint"></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="crumb" id="crumb">概览</div>
+      <div class="grow"></div>
+      <button class="btn ghost" id="btnChecks" title="系统体检：浏览器 / 简历 / AI Key / 数据库 / 平台配置"><svg><use href="#i-shield"/></svg>体检</button>
+      <button class="btn ghost icon" id="btnRefresh" title="刷新 (r)" aria-label="刷新"><svg><use href="#i-refresh"/></svg></button>
+      <button class="btn ghost icon" id="btnTheme" title="切换主题" aria-label="切换主题"><svg><use href="#i-moon"/></svg></button>
+      <div class="divider"></div>
+      <select id="platform" class="select" title="采集和投递要开平台页面，在这里选平台；评分、招呼语对所有平台生效" aria-label="采集 / 投递的平台"></select>
+      <div class="btn-group">
+        <button class="btn" id="btnCollect" title="按配置里的关键词、城市、页数采集">采集</button>
+        <button class="btn" id="btnApply" title="投递已确认的岗位（会真的发出招呼）">投递</button>
+      </div>
+      <div class="btn-group">
+        <button class="btn" id="btnScore" title="给所有平台新采到的岗位打分">评分</button>
+        <button class="btn" id="btnGreet" title="给所有平台待确认的岗位写招呼语">招呼语</button>
+      </div>
+      <button class="btn primary" id="btnFull"><svg><use href="#i-play"/></svg>运行全流程</button>
+      <button class="btn ghost icon" id="btnPause" disabled title="暂停/继续当前任务" aria-label="暂停或继续当前任务"><svg><use href="#i-pause"/></svg></button>
+      <button class="btn danger icon" id="btnStop" disabled aria-label="停止当前任务" title="停止当前任务：在安全点收手，不打断正在进行的动作（关闭页面不会停止它）"><svg><use href="#i-stop"/></svg></button>
+    </header>
+
+    <div class="content" id="content">
+      <div class="offline-bar" id="offlineBar" role="alert"><svg class="ico"><use href="#i-alert"/></svg><span>连不上看板服务（可能已经自动退出）。恢复后这里会自动消失；一直不恢复就双击「启动 JobPilot」重开。</span></div>
+      <section class="view is-active" data-view="overview">
+        <div id="steps" class="steps"></div>
+        <div class="kpis" id="kpis"></div>
+        <div class="cols ov-cols">
+          <div class="col-main">
+            <div class="card">
+              <div class="card-head">
+                <h2><svg class="ico"><use href="#i-bolt"/></svg>任务</h2>
+                <span class="pill" id="taskPill">空闲</span>
+                <div class="grow"></div>
+                <span class="muted small" id="taskMeta"></span>
+              </div>
+              <div class="card-body">
+                <div id="progress"></div>
+                <pre class="logs" id="logs"></pre>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2><svg class="ico"><use href="#i-inbox"/></svg>待确认投递 <span class="pill" id="pendingCount">0</span></h2>
+                <div class="grow"></div>
+                <button class="btn small" id="btnConfirmAll">全部确认</button>
+                <button class="btn small ghost" id="btnRejectAll">全部拒绝</button>
+              </div>
+              <div class="card-body" id="pending"></div>
+              <div class="pager" id="pendingPager" hidden></div>
+            </div>
+          </div>
+          <div class="col-side">
+            <div class="card">
+              <div class="card-head">
+                <h2><svg class="ico"><use href="#i-shield"/></svg>风控仪表</h2>
+                <div class="grow"></div>
+                <span class="muted small" id="riskHint"></span>
+              </div>
+              <div class="card-body" id="risk"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="jobs">
+        <div class="card">
+          <div class="card-head">
+            <h2><svg class="ico"><use href="#i-list"/></svg>岗位池</h2>
+            <span class="muted small" id="jobHint"></span>
+            <div class="grow"></div>
+            <label class="field inline search">
+              <svg class="ico"><use href="#i-search"/></svg>
+              <input id="jobQuery" placeholder="搜索标题 / 公司…（按 / 聚焦）">
+            </label>
+            <button class="btn small ghost" id="btnBadNature" aria-pressed="false" title="隐藏识别为外包/培训/营销话术的岗位">只看正常岗</button>
+            <button class="btn small ghost" id="btnBin">回收站</button>
+            <a class="btn small ghost" id="btnExport" href="/api/export" download title="导出当前筛选下的岗位">导出 CSV</a>
+          </div>
+          <div class="seg" id="jobStats"></div>
+          <div class="bulk" id="jobBulk" hidden>
+            <span class="bulk-count" id="bulkCount">已选 0 个</span>
+            <div class="grow"></div>
+            <button class="btn small primary" id="bulkConfirm" title="只对「待确认」的岗位生效；确认后要再运行「投递」才会真的发出">确认投递</button>
+            <button class="btn small ghost" id="bulkReject">拒绝</button>
+            <button class="btn small ghost danger" id="bulkDelete">移入回收站</button>
+            <button class="btn small ghost" id="bulkClear">取消选择</button>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr>
+                <th class="pick"><input type="checkbox" id="jobPickAll" title="全选当前列表"></th>
+                <th class="sortable" data-sort="title" title="点一下按标题排序">标题</th>
+                <th class="sortable" data-sort="company" title="点一下按公司排序">公司</th>
+                <th>平台</th>
+                <th class="sortable" data-sort="city" title="点一下按城市排序">城市</th>
+                <th>薪资</th>
+                <th class="num sortable" data-sort="score" title="点一下按分数排序">分</th>
+                <th class="sortable" data-sort="status" title="点一下按状态排序">状态</th>
+                <th></th>
+              </tr></thead>
+              <tbody id="jobs"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="jobPager" hidden></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="monitor">
+        <div class="card">
+          <div class="card-head">
+            <h2><svg class="ico"><use href="#i-clock"/></svg>待跟进 <span class="pill" id="followCount">0</span></h2>
+            <div class="grow"></div>
+            <button class="btn small primary" id="btnFollowUp">生成跟进话术</button>
+            <span class="muted small" id="followHint"></span>
+          </div>
+          <div class="card-body" id="followUps"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2><svg class="ico"><use href="#i-chat"/></svg>投递之后的进展</h2>
+            <div class="grow"></div>
+            <span class="pill" id="hrMode">未开放</span>
+            <span class="muted small" id="hrHint"></span>
+          </div>
+          <div class="seg" id="hrStats"></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>公司</th><th>岗位</th><th>HR</th><th>状态</th><th>最近消息</th><th>时间</th></tr></thead>
+              <tbody id="hr"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="activity">
+        <div class="kpis" id="actKpis"></div>
+        <!-- 按「内容多少」配对：左右两边的卡片加起来差不多高，再用伸缩把最后一点差距吃掉 -->
+        <div class="act-row">
+          <div class="act-stack">
+            <div class="card">
+              <div class="card-head">
+                <h2><svg class="ico"><use href="#i-chart"/></svg>今日开页面节奏</h2>
+                <div class="grow"></div>
+                <span class="muted small" id="actHourHint"></span>
+              </div>
+              <div class="card-body" id="actHours"></div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2><svg class="ico"><use href="#i-target"/></svg>求职漏斗</h2>
+                <div class="grow"></div>
+                <span class="muted small" id="actFunnelHint"></span>
+              </div>
+              <div class="card-body" id="actFunnel"></div>
+            </div>
+          </div>
+          <div class="act-stack">
+            <div class="card">
+              <div class="card-head"><h2><svg class="ico"><use href="#i-list"/></svg>近 7 天开页面</h2></div>
+              <div class="card-body" id="actDays"></div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2><svg class="ico"><use href="#i-list"/></svg>关键词效果</h2>
+                <div class="grow"></div>
+                <span class="muted small">平均分越高，这个词越值得采</span>
+              </div>
+              <div class="card-body" id="actKeywords"></div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h2><svg class="ico"><use href="#i-stack"/></svg>公司分布</h2>
+                <div class="grow"></div>
+                <span class="muted small">一家公司挂得越多，越可能是外包 / 中介</span>
+              </div>
+              <div class="card-body" id="actCompanies"></div>
+            </div>
+          </div>
+        </div>
+        <div class="act-row r-logs">
+          <div class="card">
+            <div class="card-head">
+              <h2><svg class="ico"><use href="#i-bolt"/></svg>任务历史</h2>
+              <div class="grow"></div>
+              <span class="muted small" id="actRunsHint"></span>
+            </div>
+            <div class="table-wrap">
+              <!-- 固定列宽：前五列给足宽度、不换行；「结果 / 原因」占剩下的全部，太长截断 -->
+              <table class="table runs-table">
+                <colgroup><col class="c-time"><col class="c-mode"><col class="c-plat"><col class="c-state"><col class="c-dur"><col></colgroup>
+                <thead><tr><th>开始</th><th>任务</th><th>平台</th><th>状态</th><th class="num">耗时</th><th>结果 / 原因</th></tr></thead>
+                <tbody id="actRuns"></tbody>
+              </table>
+            </div>
+            <div class="pager" id="actRunsPager" hidden></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2><svg class="ico"><use href="#i-shield"/></svg>风控事件</h2>
+              <div class="grow"></div>
+              <span class="muted small" id="actEventHint"></span>
+            </div>
+            <div class="card-body" id="actEvents"></div>
+            <div class="pager" id="actEventsPager" hidden></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" data-view="config">
+        <div class="card">
+          <div class="card-head">
+            <h2><svg class="ico"><use href="#i-cog"/></svg>配置</h2>
+            <div class="grow"></div>
+            <span class="muted small" id="configHint"></span>
+          </div>
+          <div class="cfg-layout">
+            <nav class="cfg-nav" id="cfgNav"></nav>
+            <div class="card-body" id="configForm"></div>
+          </div>
+          <div class="card-foot">
+            <button class="btn primary" id="btnSaveConfig">保存配置</button>
+            <button class="btn ghost" id="btnReloadConfig">放弃修改</button>
+            <span class="muted small" id="saveMsg"></span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="drawer-backdrop" id="drawerBackdrop"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+  <div class="drawer-head"><h3 id="drawerTitle">岗位详情</h3><span id="drawerNature" class="pill-row"></span><button class="btn ghost icon" id="btnDrawerClose" aria-label="关闭详情"><svg><use href="#i-x"/></svg></button></div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal" id="modalBox" role="alertdialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalText">
+    <div class="modal-ico" id="modalIco"></div>
+    <h3 id="modalTitle">确认</h3>
+    <p id="modalText"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="modalCancel">取消</button>
+      <button class="btn primary" id="modalOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
