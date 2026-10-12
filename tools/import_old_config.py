@@ -1,4 +1,4 @@
-r"""把旧版 JobPilot（E:\JobPilot）的 ai / profile 配置迁移到新版 JobPilot，并把浏览器指向已登录的 Chrome。
+r"""把旧版 JobPilot（E:\JobPilot-v1）的 ai / profile 配置迁移到新版 JobPilot，并把浏览器指向已登录的 Chrome。
 
 用法: python tools\import_old_config.py [旧config路径] [cdpUrl]
 """
@@ -16,7 +16,7 @@ from jobpilot.config import CONFIG_PATH, AiCfg, AppConfig, ProfileCfg, load_conf
 
 
 def main() -> int:
-    src = Path(sys.argv[1] if len(sys.argv) > 1 else r"E:\JobPilot\config.yaml")
+    src = Path(sys.argv[1] if len(sys.argv) > 1 else r"E:\JobPilot-v1\config.yaml")
     cdp = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:9222"
 
     cfg: AppConfig = load_config()
