@@ -233,6 +233,9 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                     for s in (Status.NEW.value, Status.PENDING_CONFIRM.value,
                               Status.APPROVED.value, Status.APPLIED.value)
                 },
+                # 岗位池真实总数（所有状态）。以前概览「岗位池」用上面 4 个状态相加，
+                # 没算「未通过 / 被拒 / 已投过」：库里 31 个岗位，界面只写 4
+                "pool_total": sum(all_counts.values()),
                 # 只回概览「待确认」卡片用到的字段：这个接口每 2 秒轮询一次，
                 # 以前把整个岗位（含 JD 正文）都塞进来，2 万岗位的库里一次就是 111KB
                 "pending_confirm": [{key: getattr(job, key) for key in PENDING_FIELDS} for job in pending],
@@ -770,6 +773,14 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 "X-Backup-Files": str(len(info["files"])),
             },
         )
+
+    @app.post("/api/browser/launch")
+    def launch_browser():
+        """替用户开一个带调试端口的 Chrome（登录态存在 data/chrome-profile，下次还在）。"""
+        from ..browser.launcher import launch
+
+        cfg = load_config()
+        return launch(cfg.browser.cdp_url, DATA_DIR / "chrome-profile")
 
     @app.get("/api/health")
     def health():

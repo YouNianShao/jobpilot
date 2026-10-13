@@ -46,10 +46,10 @@ def run_checks(ctx: ServiceContext) -> dict:
             browser.close()
         checks.append(_row("browser", "浏览器连接", ok,
                            "已连上你登录好的 Chrome" if ok else "连不上 CDP",
-                           "Chrome 要以 --remote-debugging-port=9222 启动，并保持登录"))
+                           "点左下角「启动浏览器」，在打开的 Chrome 里登录招聘网站"))
     except Exception as exc:  # noqa: BLE001
         checks.append(_row("browser", "浏览器连接", False, f"{type(exc).__name__}: {exc}",
-                           "检查 config.yaml 的 browser.cdp_url 与 Chrome 是否在跑"))
+                           "点左下角「启动浏览器」；还不行就检查 设置 里的浏览器地址"))
 
     # 4) 数据库写得进去吗（只写一个探针键）
     try:

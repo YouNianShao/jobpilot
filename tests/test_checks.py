@@ -56,7 +56,7 @@ def test_checks_flag_browser_down_as_hard_failure(tmp_path):
     assert "browser" in report["failed"]
     rows = _by_key(report)
     assert rows["browser"]["level"] == "error"
-    assert "remote-debugging-port" in rows["browser"]["fix"]
+    assert "启动浏览器" in rows["browser"]["fix"]           # 告诉用户点哪个按钮，而不是一串命令行参数
 
 
 def test_checks_treat_missing_key_or_resume_as_hard_failures(tmp_path):

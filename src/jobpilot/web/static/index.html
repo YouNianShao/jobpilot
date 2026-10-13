@@ -70,6 +70,8 @@
       </a>
       <div class="browser-state" id="browserState">
         <span class="dot"></span><span id="browserText">检测中…</span>
+        <!-- 浏览器没开时才显示：替用户把带调试端口的 Chrome 打开（登录态存在 data/chrome-profile） -->
+        <button class="btn small primary" id="btnLaunchBrowser" type="button" hidden>启动浏览器</button>
       </div>
       <div class="muted small" id="idleHint"></div>
     </div>
@@ -100,8 +102,8 @@
     <div class="content" id="content">
       <div class="offline-bar" id="offlineBar" role="alert"><svg class="ico"><use href="#i-alert"/></svg><span>连不上看板服务（可能已经自动退出）。恢复后这里会自动消失；一直不恢复就双击「启动 JobPilot」重开。</span></div>
       <section class="view is-active" data-view="overview">
-        <div id="steps" class="steps"></div>
-        <div class="kpis" id="kpis"></div>
+        <!-- 流程四步：采集 → 待评分 → 待确认 → 投递（数量 + 该点的按钮） -->
+        <div class="pipeline" id="kpis"></div>
         <div class="cols ov-cols">
           <div class="col-main">
             <div class="card">
@@ -211,7 +213,6 @@
       </section>
 
       <section class="view" data-view="activity">
-        <div class="kpis" id="actKpis"></div>
         <!-- 按「内容多少」配对：左右两边的卡片加起来差不多高，再用伸缩把最后一点差距吃掉 -->
         <div class="act-row">
           <div class="act-stack">

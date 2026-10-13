@@ -35,6 +35,9 @@ def clean(text: object) -> str:
     out = str(text or "").strip()
     if not out:
         return ""
+    # 浏览器没开：patchright 的原文是一长串英文调用日志，用户只需要知道「去开浏览器」
+    if "connect_over_cdp" in out or "ECONNREFUSED" in out:
+        return "连不上浏览器：带调试端口的 Chrome 没有开着。点左下角「启动浏览器」，登录招聘网站后再试"
     out = _PLATFORM_TAG.sub(lambda m: platform_name(m.group(1)) + "：", out)
     for path, hint in _CONFIG_HINTS.items():
         out = out.replace(f"（{path}）", f"（{hint}）").replace(path, hint)

@@ -240,3 +240,47 @@ def test_event_text_for_real_records():
     assert text == "BOSS直聘 第 3 次页面异常：搜索页 上海/AI 未找到预期内容（可能改版或被拦截）"
     for raw in ("boss new=0", "boss/page_failures", "[boss]"):
         assert raw not in text
+
+
+# ---------- 浏览器没开 ----------
+
+def test_cdp_refused_is_explained_in_words():
+    from jobpilot.readable import run_summary
+
+    raw = ("Error: BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9222 Call log: "
+           "- <ws preparing> retrieving websocket url from http://127.0.0.1:9222")
+    text = run_summary("collect", None, raw)
+    assert "connect_over_cdp" not in text and "ECONNREFUSED" not in text
+    assert "启动浏览器" in text
+
+
+def test_launcher_does_nothing_when_port_already_open(monkeypatch, tmp_path):
+    from jobpilot.browser import launcher
+
+    monkeypatch.setattr(launcher, "port_open", lambda host, port, timeout=0.6: True)
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不该再开一个")))
+    assert launcher.launch("http://127.0.0.1:9222", tmp_path / "p") == {"ok": True, "already": True, "profile": str(tmp_path / "p")}
+
+
+def test_launcher_starts_chrome_with_debug_port_and_own_profile(monkeypatch, tmp_path):
+    from jobpilot.browser import launcher
+
+    calls, state = [], {"open": False}
+    monkeypatch.setattr(launcher, "port_open", lambda host, port, timeout=0.6: state["open"])
+    monkeypatch.setattr(launcher, "find_chrome", lambda: r"C:\chrome.exe")
+
+    def fake_popen(args, **kwargs):
+        calls.append(args)
+        state["open"] = True
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", fake_popen)
+    res = launcher.launch("http://127.0.0.1:9333", tmp_path / "profile")
+    assert res["ok"] and res["already"] is False
+    assert "--remote-debugging-port=9333" in calls[0]
+    assert f"--user-data-dir={tmp_path / 'profile'}" in calls[0]
+
+
+def test_launcher_refuses_remote_hosts(tmp_path):
+    from jobpilot.browser import launcher
+
+    assert launcher.launch("http://10.0.0.5:9222", tmp_path)["ok"] is False

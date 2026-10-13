@@ -47,94 +47,64 @@ function switchView(name) {
   if (name === 'config') loadConfig();
 }
 
-/* ---------------- 概览：引导 ---------------- */
-function renderSteps(status) {
-  const box = $('steps');
-  clear(box);
-  const counts = status.counts || {};
-  const total = poolTotal(counts);
-  const pending = counts.pending_confirm || 0;
-
-  if (!total) {
-    const steps = [
-      ['采集岗位', '从已启用的平台抓一轮岗位', '采集', () => runTask('collect'), false],
-      ['AI 评分', '按简历和阈值挑出值得投的', '评分', () => runTask('score'), true],
-      ['确认投递', '你点确认之后才真的打招呼', '运行全流程', () => runTask('full'), true],
-    ];
-    steps.forEach(([title, sub, btn, fn, disabled], index) => {
-      box.appendChild(el('div', { class: 'step' + (index === 0 ? ' is-now' : '') }, [
-        el('div', { class: 'step-i', text: String(index + 1) }),
-        el('div', { class: 'step-body' }, [el('b', { text: title }), el('span', { text: sub })]),
-        el('button', { class: 'btn small' + (index === 0 ? ' primary' : ''), text: btn, disabled, onclick: fn }),
-      ]));
-    });
-    return;
-  }
-
-  // 岗位池里有东西之后：告诉用户「下一步该点什么」，而不是让人自己去猜流程
-  const fresh = counts.new || 0;
-  const approved = counts.approved || 0;
-  const running = !!status.running;
-  const next = (iconName, title, sub, label, fn) => box.appendChild(el('div', { class: 'step is-now' }, [
-    el('div', { class: 'step-i' }, [icon(iconName)]),
-    el('div', { class: 'step-body' }, [el('b', { text: title }), el('span', { text: sub })]),
-    el('button', { class: 'btn small primary', text: label, disabled: running, onclick: fn }),
-  ]));
-  if (fresh) {
-    next('spark', fresh + ' 个新采到的岗位还没评分', '评分过阈值的会进「待确认」；没过的沉到池底，不会被投递',
-      '评分', () => runTask('score'));
-  }
-  if (pending) {
-    next('inbox', '有 ' + pending + ' 个岗位在等你确认', '确认之后才会真的投递，这是最后一道人工闸门', '去确认',
-      () => $('pending').scrollIntoView({ behavior: 'smooth', block: 'center' }));
-  }
-  if (approved) {
-    next('send', approved + ' 个已确认的岗位在等投递', '投递会在平台上发起沟通并发出招呼语', '投递', () => runTask('apply'));
-  }
-}
-
-/* ---------------- 概览：KPI ---------------- */
-function renderKpis(status) {
-  const counts = status.counts || {};
-  const applied = status.applied_today ?? 0;
-  const limit = status.daily_limit ?? 30;
-  const usedPct = limit ? Math.min(100, (applied / limit) * 100) : 0;
-
-  const cards = [
-    {
-      icon: 'send', label: '今日投递', value: applied, unit: '/ ' + limit,
-      tone: applied >= limit ? 'is-warn' : 'is-accent',
-      pct: usedPct, meterTone: usedPct >= 85 ? 'bad' : (usedPct >= 60 ? 'warn' : 'ok'),
-      sub: applied >= limit ? '已达风控硬上限，今天不会再投' : ('还能投 ' + (limit - applied) + ' 个'),
-    },
-    {
-      icon: 'inbox', label: '待确认', value: counts.pending_confirm ?? 0, unit: '',
-      tone: (counts.pending_confirm ? 'is-warn' : ''),
-      sub: counts.pending_confirm ? '需要你点一下才会投递' : '没有堆积',
-    },
-    {
-      icon: 'check', label: '已确认', value: counts.approved ?? 0, unit: '',
-      tone: counts.approved ? 'is-ok' : '',
-      sub: '排队等待投递',
-    },
-    {
-      icon: 'stack', label: '岗位池', value: poolTotal(counts), unit: '',
-      sub: (counts.applied ?? 0) + ' 个已投递',
-    },
-  ];
-
+/* ---------------- 概览：流程四步 ----------------
+   以前概览上面有两排：一排「下一步」引导条，一排 4 张数字卡（今日投递 / 待确认 / 已确认 / 岗位池），
+   同一个「待确认 4」在引导条、数字卡、下面的卡片标题里出现了三遍；「岗位池」还只加了 4 个状态（库里 31 个只写 4）。
+   现在合成一排：按流程顺序排的 4 步，每一步 = 数量 + 一句说明 + 这一步该点的按钮。
+   点数字本身 = 去岗位池看这些岗位。 */
+function renderPipeline(status) {
   const box = $('kpis');
   clear(box);
-  for (const card of cards) {
-    box.appendChild(el('div', { class: 'kpi ' + (card.tone || '') }, [
-      el('div', { class: 'kpi-top' }, [icon(card.icon), card.label]),
-      el('div', { class: 'v' }, [String(card.value), card.unit ? el('span', { class: 'unit', text: card.unit }) : null]),
-      card.pct === undefined ? null : meter(card.pct, card.meterTone),
-      el('div', { class: 's', text: card.sub }),
-    ]));
+  const counts = status.counts || {};
+  const running = !!status.running;
+  const applied = status.applied_today ?? 0;
+  const limit = status.daily_limit ?? 30;
+  const total = status.pool_total ?? poolTotal(counts);
+  const fresh = counts.new || 0;
+  const pending = counts.pending_confirm || 0;
+  const approved = counts.approved || 0;
+  const usedPct = limit ? Math.min(100, (applied / limit) * 100) : 0;
+  const steps = [
+    {
+      n: 1, label: '采集', value: total, unit: '个岗位', filter: '',
+      sub: total ? '岗位池里一共这么多（各状态都算）' : '还没有岗位：先按配置里的关键词和城市采一轮',
+      action: ['采集', () => runTask('collect')], now: !total,
+    },
+    {
+      n: 2, label: '待评分', value: fresh, unit: '个', filter: 'new',
+      sub: fresh ? '评分过阈值的进「待确认」，没过的不会被投递' : '没有待评分的岗位',
+      action: fresh ? ['评分', () => runTask('score')] : null, now: !!fresh,
+    },
+    {
+      n: 3, label: '待确认', value: pending, unit: '个', filter: 'pending_confirm',
+      sub: pending ? '你确认之后才会投递，这是最后一道人工闸门' : '没有在等你确认的岗位',
+      action: pending ? ['去确认', () => $('pending').scrollIntoView({ behavior: 'smooth', block: 'start' })] : null,
+      now: !!pending && !fresh, local: true,
+    },
+    {
+      n: 4, label: '今日投递', value: applied, unit: '/ ' + limit, filter: 'approved', pct: usedPct,
+      sub: approved ? (approved + ' 个已确认，等着投递') : (applied >= limit ? '已到今天的上限' : '还能投 ' + (limit - applied) + ' 个'),
+      action: approved ? ['投递', () => runTask('apply')] : null, now: !!approved && !pending && !fresh,
+    },
+  ];
+  for (const step of steps) {
+    const card = el('div', { class: 'pipe' + (step.now ? ' is-now' : '') + (step.value ? '' : ' is-zero') });
+    card.appendChild(el('div', { class: 'pipe-top' }, [el('span', { class: 'pipe-n', text: String(step.n) }), step.label]));
+    card.appendChild(el('button', {
+      class: 'pipe-v', type: 'button', title: '去岗位池看这些岗位',
+      onclick: () => { switchView('jobs'); setStatusFilter(step.filter); },
+    }, [String(step.value), el('span', { class: 'unit', text: step.unit })]));
+    if (step.pct !== undefined) card.appendChild(meter(step.pct, step.pct >= 85 ? 'bad' : (step.pct >= 60 ? 'warn' : 'ok')));
+    card.appendChild(el('div', { class: 'pipe-sub', text: step.sub }));
+    if (step.action) {
+      card.appendChild(el('button', {
+        class: 'btn small' + (step.now ? ' primary' : ''), type: 'button', text: step.action[0],
+        disabled: running && !step.local, onclick: step.action[1],
+      }));
+    }
+    box.appendChild(card);
   }
 }
-/* ---------------- 概览：风控仪表 ---------------- */
 /* ---------------- 概览：风控仪表 ----------------
    为什么重做：以前每个平台摊开 6 条进度条 + 页脚 + 锁提示，4 个平台就是一面绿条墙，
    最该一眼看清的「现在能不能干活、还差多少到上限」反而埋在最里面。
@@ -544,44 +514,10 @@ async function loadActivity() {
 
 function renderActivity(data) {
   const today = data.today || {};
-  const events = today.events || {};
   const week = data.week || {};
-  const pages = today.pages || {};
 
-  // KPI：今日做了什么 + 近 7 天风控
-  const cards = [
-    {
-      icon: 'stack', label: '今日开页面', value: today.pages_total || 0, unit: '',
-      tone: 'is-accent',
-      sub: '搜索 ' + (pages.collect_search || 0) + ' · 详情 ' + (pages.collect_detail || 0)
-        + ' · 投递 ' + (pages.apply || 0) + ' · 监测 ' + (pages.monitor || 0),
-    },
-    { icon: 'list', label: '今日采集', value: events.collected || 0, unit: '', sub: '新入库岗位' },
-    {
-      icon: 'spark', label: '今日评分', value: events.scored || 0, unit: '',
-      sub: '预筛淘汰 ' + (events.prefilter_rejected || 0) + ' 个',
-    },
-    {
-      icon: 'send', label: '今日投递', value: events.applied || 0, unit: '',
-      tone: events.applied ? 'is-ok' : '',
-      sub: '确认 ' + (events.confirmed || 0) + ' 个',
-    },
-    {
-      icon: 'shield', label: '近 ' + (data.days || 7) + ' 天风控', value: week.risk_lock || 0, unit: '次',
-      tone: week.risk_lock ? 'is-warn' : '',
-      sub: '速率停手 ' + (week.rate_stop || 0) + ' 次 · 页面异常 ' + (week.page_error || 0) + ' 次',
-    },
-  ];
-  const kpiBox = $('actKpis');
-  clear(kpiBox);
-  for (const card of cards) {
-    kpiBox.appendChild(el('div', { class: 'kpi ' + (card.tone || '') }, [
-      el('div', { class: 'kpi-top' }, [icon(card.icon), card.label]),
-      el('div', { class: 'v' }, [String(card.value)]),
-      el('div', { class: 's', text: card.sub }),
-    ]));
-  }
-
+  // 以前这里还有一排 5 张数字卡（今日开页面 / 采集 / 评分 / 投递 / 近 7 天风控）：
+  // 下面的节奏图、漏斗、风控事件说的就是同一组数，概览上又有一遍「今日投递」，所以删掉了。
   // 今日 24 小时节奏：机器人最明显的特征就是"整段整段地连续开页面"
   const byHour = {};
   for (const row of (data.pages_by_hour || [])) byHour[Number(row.hour)] = Number(row.count);
@@ -753,7 +689,8 @@ function renderActivity(data) {
   clear(evBox);
   const eventsPager = data.events_pager || { page: 1, pages: 1, total: list.length, limit: list.length };
   actPage.events = eventsPager.page;
-  $('actEventHint').textContent = eventsPager.total ? '共 ' + eventsPager.total + ' 条' : '';
+  $('actEventHint').textContent = (eventsPager.total ? '共 ' + eventsPager.total + ' 条' : '')
+    + ' · 近 ' + (data.days || 7) + ' 天暂停平台 ' + (week.risk_lock || 0) + ' 次、页面异常 ' + (week.page_error || 0) + ' 次';
   renderPager($('actEventsPager'), eventsPager, (n) => { actPage.events = n; loadActivity(); });
   if (!list.length) {
     evBox.appendChild(empty('还没有风控/系统事件', '命中验证码、限流、速率停手都会记在这里'));
@@ -1119,6 +1056,14 @@ function taskSummary(mode) {
 
 async function runTask(mode) {
   if (NEEDS_PLATFORM.has(mode) && !state.platform) { toast('先在顶栏选一个平台', 'warn'); return; }
+  // 采集 / 投递要开平台页面：浏览器没连上就先说清楚，不要等任务跑起来再报一串英文
+  if (NEEDS_PLATFORM.has(mode) && state.browserOk === false) {
+    const go = await confirmDialog('浏览器还没打开',
+      '采集和投递要用一个带调试端口、已经登录招聘网站的 Chrome，现在它没有开着。\n现在替你打开吗？打开后先登录，再回来点「' + (TASK_TITLE[mode] || mode) + '」。',
+      { okText: '启动浏览器', kind: 'warn' });
+    if (go) launchBrowser();
+    return;
+  }
   if (mode === 'apply') {
     const approved = (state.status && state.status.counts && state.status.counts.approved) || 0;
     const left = (((state.status || {}).platforms || {})[state.platform] || {}).remaining || {};
@@ -1181,10 +1126,9 @@ async function refresh() {
     ? '只投递已确认的岗位'
     : '当前平台还没有开放自动投递：驱动能力未实机核验，或设置里关掉了「允许对该平台投递」';
 
-  renderKpis(status);
   renderTask(status);
   if (state.view === 'overview') {
-    renderSteps(status);
+    renderPipeline(status);
     renderRisk(status);
     renderPending(status);
   }
@@ -1202,8 +1146,24 @@ function schedulePoll() {
    以前它卡在 refresh() 里，等于整个看板每次刷新都慢 2 秒。 */
 async function checkBrowser() {
   const health = await get('/api/health');
+  state.browserOk = !!health.ok;
   $('browserState').className = 'browser-state ' + (health.ok ? 'ok' : 'err');
   $('browserText').textContent = health.ok ? '浏览器已连接' : '浏览器未连接';
+  $('btnLaunchBrowser').hidden = !!health.ok;
+}
+
+/* 采集 / 投递都要用「带调试端口、已登录」的 Chrome。没开的话点一下就替你开
+   （独立的登录资料目录，登录一次以后一直在；不会动你平时用的 Chrome） */
+async function launchBrowser() {
+  await withLoading($('btnLaunchBrowser'), async () => {
+    const res = await post('/api/browser/launch');
+    if (!res.ok) { await alertDialog('浏览器没能打开', res.error || '未知原因', 'warn'); return; }
+    await checkBrowser();
+    if (!res.already) {
+      await alertDialog('浏览器已打开', '在刚打开的 Chrome 窗口里登录 BOSS直聘（和其它要用的招聘网站），'
+        + '登录一次就会记住。登录好之后回来点「采集」。', 'ok');
+    }
+  });
 }
 
 function scheduleBrowserCheck() {
@@ -1215,7 +1175,7 @@ function paintSkeletons() {
   const kpis = $('kpis');
   clear(kpis);
   for (let i = 0; i < 4; i += 1) {
-    kpis.appendChild(el('div', { class: 'kpi is-skel', 'aria-hidden': 'true' }, [
+    kpis.appendChild(el('div', { class: 'pipe is-skel', 'aria-hidden': 'true' }, [
       el('span', { class: 'skel w-30' }), el('span', { class: 'skel h-l w-50', style: 'margin-top:14px' }),
       el('span', { class: 'skel w-70', style: 'margin-top:14px' }),
     ]));
@@ -1266,6 +1226,7 @@ function init() {
   });
   $('btnFollowUp').addEventListener('click', () => startFollowUp());
   $('btnChecks').addEventListener('click', openChecks);
+  $('btnLaunchBrowser').addEventListener('click', launchBrowser);
   $('btnDrawerClose').addEventListener('click', closeDrawer);
   $('drawerBackdrop').addEventListener('click', closeDrawer);
 

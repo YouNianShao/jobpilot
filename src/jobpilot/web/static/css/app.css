@@ -221,6 +221,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 .gh-ext { width: 13px; height: 13px; margin-left: auto; flex: none; stroke: var(--muted); fill: none; stroke-width: 2; }
 .gh-link:hover .gh-ext { stroke: var(--accent); }
 .browser-state { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); }
+.browser-state #btnLaunchBrowser { margin-left: auto; }
 .browser-state.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
 .browser-state.err .dot { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
 
@@ -326,7 +327,7 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
    第一行：[今日节奏 + 求职漏斗] | [近 7 天 + 关键词效果 + 公司分布]
    第二行：任务历史 | 风控事件（都分页）
    高度差不靠「卡片底下空一截」消化：漏斗、风控事件的行会均匀铺开，把卡片撑满 */
-.view[data-view="activity"] { display: flex; flex-direction: column; gap: 16px; }
+/* 注意：这里不能写 display —— 它比 .view { display:none } 更具体，会让记录页在每个视图都显示 */
 .act-row { display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(320px, 1fr); gap: 16px; align-items: stretch; }
 .act-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .act-row > .card, .act-stack > .card { display: flex; flex-direction: column; }
@@ -348,6 +349,36 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* 看起来像文字链接的按钮 */
 button.link, a.link { padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; text-decoration: none; }
 button.link:hover, a.link:hover { text-decoration: underline; }
+
+/* 概览：流程四步（采集 → 待评分 → 待确认 → 投递）。每一格：序号 + 名称 / 大数字（点了去岗位池）/ 说明 / 该点的按钮。
+   「现在该做的这一步」描一圈强调色；数量为 0 的一步整体淡一点，眼睛自然落在有事做的那一格 */
+.pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.pipe {
+  display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; border-radius: var(--r-lg);
+  background-image: var(--panel); background-color: var(--surface); border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-2), var(--hairline); position: relative;
+}
+.pipe + .pipe::before {               /* 步与步之间的小箭头：这是一条流程，不是四个并列的数字 */
+  content: '›'; position: absolute; left: -13px; top: 50%; transform: translateY(-50%);
+  font-size: 18px; color: var(--line-strong);
+}
+.pipe.is-now { border-color: var(--accent-line); box-shadow: var(--shadow-2), 0 0 0 1px var(--accent-line); }
+.pipe.is-zero .pipe-v { color: var(--muted); }
+.pipe-top { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); font-weight: var(--fw-medium); }
+.pipe-n {
+  width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  font-size: var(--fs-xs); font-weight: var(--fw-bold); background: var(--fill-2); color: var(--muted);
+}
+.pipe.is-now .pipe-n { background: var(--accent); color: var(--accent-ink); }
+.pipe-v {
+  align-self: flex-start; padding: 0; border: 0; background: none; cursor: pointer; font: inherit;
+  font-size: 28px; font-weight: var(--fw-bold); letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums;
+}
+.pipe-v:hover { color: var(--accent); }
+.pipe-v .unit { margin-left: 6px; font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--muted); }
+.pipe-sub { font-size: var(--fs-sm); color: var(--muted); line-height: var(--lh); min-height: 2.6em; }
+.pipe > .btn { align-self: flex-start; margin-top: auto; }
+@media (max-width: 1100px) { .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pipe + .pipe::before { display: none; } }
 
 /* ---------------- 8. KPI ---------------- */
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
