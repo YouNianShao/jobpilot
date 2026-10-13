@@ -68,7 +68,7 @@ def collect(ctx: ServiceContext, platform: str, *, registry=None,
 
     ctx.policy.record_page_success(platform)
     ctx.policy.note_collect_done(platform)  # 采完 → 投递要冷却一段随机时间
-    ctx.repo.add_event(None, "collect", f"{platform} new={result.new} seen={result.seen}")
+    ctx.repo.add_event(None, "collect", f"{platform} new={result.new} seen={result.seen} dup={result.duplicate} filtered={result.filtered} skipped={result.skipped}")
     payload = {
         "platform": platform, "new": result.new, "seen": result.seen,
         "duplicate": result.duplicate, "filtered": result.filtered, "stopped": result.stopped,

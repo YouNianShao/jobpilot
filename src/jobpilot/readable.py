@@ -169,10 +169,17 @@ def event_text(kind: str, detail: str) -> str:
         if kind == "monitor":
             return f"{name} 看了 {values.get('checked', 0)} 个会话"
         new, seen = values.get("new", 0), values.get("seen", 0)
+        dup, filtered, skipped = values.get("dup"), values.get("filtered"), values.get("skipped")
         if not seen:
-            # 这一条事件分不出是「最近采过、跳过」还是「被冷却 / 时段挡住」：只陈述结果，原因看任务历史
+            if skipped:   # 新格式记了 skipped：6 小时内采过的页不重开，这是防重复刷页的保护
+                return f"{name} 这几页 6 小时内刚采过，没有重复打开（防止反复刷同一页）"
             return f"{name} 这次没有打开新的搜索页，没采到岗位（原因见任务历史）"
-        return f"{name} 看到 {seen} 个岗位，新增 {new} 个" + ("" if new else "（都已在库里）")
+        text = f"{name} 看到 {seen} 个岗位，新增 {new} 个"
+        if dup is None:   # 旧记录只有 new / seen，分不出是重复还是被拦下，不乱猜
+            return text
+        why = [f"{dup} 个已在库里" if dup else "", f"{filtered} 个被筛掉" if filtered else ""]
+        why = "，".join(w for w in why if w)
+        return text + (f"（{why}）" if why else "")
     if kind == "risk_lock":
         # 新格式「boss/page_failures · 连续 3 次页面异常 · 62 分钟」；整体锁「〔整体〕… · 5 小时」
         parts = [p.strip() for p in detail.split("·")]

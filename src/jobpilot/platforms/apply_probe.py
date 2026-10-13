@@ -201,6 +201,10 @@ def probe(ctx: DriverContext, job: Job, *, platform: str, ready_selector: str, l
             pass
 
     apply_btns, already, chat = data.get("apply") or [], data.get("already") or [], data.get("chat") or []
+    # 没登录时页面上会有「验证码登录 / 获取验证码」：这是登录表单，不是平台弹出来的人机验证。
+    # 智联 10-13 实测就是这样被误判成 captcha 的 —— 有登录信号时，先当「需要登录」处理。
+    if risk == "captcha" and (data.get("loginModal") or data.get("loginLink")):
+        risk = "login_required"
     need_login = risk == "login_required" or bool(data.get("loginModal")) or bool(data.get("loginLink"))
     if need_login:
         verdict, ok = f"需要登录：请先在打开的 Chrome 里登录{label}，再预演", False

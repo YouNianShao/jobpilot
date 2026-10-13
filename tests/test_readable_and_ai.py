@@ -284,3 +284,19 @@ def test_launcher_refuses_remote_hosts(tmp_path):
     from jobpilot.browser import launcher
 
     assert launcher.launch("http://10.0.0.5:9222", tmp_path)["ok"] is False
+
+
+def test_collect_event_says_filtered_not_duplicate():
+    """智联 10-13：看到 20、20 个被筛掉 —— 以前写成「都已在库里」，实际一个都不在库里。"""
+    from jobpilot.readable import event_text
+
+    text = event_text("collect", "zhaopin new=0 seen=20 dup=0 filtered=20 skipped=0")
+    assert "20 个被筛掉" in text and "已在库里" not in text
+    assert "6 小时内刚采过" in event_text("collect", "liepin new=0 seen=0 dup=0 filtered=0 skipped=2")
+
+
+def test_zhaopin_search_url_carries_city_code():
+    from jobpilot.platforms.zhaopin import search_url
+
+    assert search_url("AI", "上海") == "https://www.zhaopin.com/jobs?jl=538&kw=AI"   # 2026-10-13 实机核验
+    assert "jl=" not in search_url("AI", "某个表里没有的城市")                       # 退回旧办法：本地过滤

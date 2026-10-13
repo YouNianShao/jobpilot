@@ -201,3 +201,17 @@ def test_apply_login_and_rate_limit_stop_the_platform(tmp_path):
     limited = ScriptedPage(JOB51_URL.format(job_id="1"), BEFORE, [{"popups": ["今日投递次数已达上限"], "buttons": []}])
     with pytest.raises(PlatformRisk):
         run_apply(tmp_path / "b", limited)
+
+
+def test_login_form_captcha_words_mean_login_not_risk(tmp_path):
+    """没登录时页面里有「验证码登录」：应报「需要登录」，不能当成风控（风控会锁平台）。"""
+    from jobpilot.platforms.zhaopin import ZhaopinDriver
+
+    url = "https://www.zhaopin.com/jobdetail/X1.htm"
+    page = page_with(url, {"url": url, "title": "t", "loginModal": False, "loginLink": True, "already": [], "chat": [],
+                           "apply": [{"text": "立即投递", "tag": "button", "cls": "a-button", "disabled": False}]},
+                     text="登录查看完整内容 手机号 验证码登录")
+    ctx, _ = ctx_for(tmp_path, "zhaopin", page)
+    job = Job(id="zhaopin-1", platform="zhaopin", external_id="1", title="t", company="c", url=url)
+    report = ZhaopinDriver().probe_apply(ctx, job)
+    assert report["need_login"] is True and report["risk"] == "login_required" and "登录" in report["verdict"]

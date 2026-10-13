@@ -99,7 +99,7 @@ def test_liepin_fetches_jd_when_enabled(tmp_path):
 
 
 def test_zhaopin_fetches_jd_when_enabled(tmp_path):
-    search = FakePage(url=zp_search("数据分析"),
+    search = FakePage(url=zp_search("数据分析", "上海"),      # 有城市码的城市带 jl= 搜（默认配置是上海）
                       evals={"job-card": json.dumps(LIST_ZP)},
                       selector_text={".job-card": ""})
     detail = FakePage(url="https://www.zhaopin.com/jobdetail/CCL1493228500J40928543912.htm",

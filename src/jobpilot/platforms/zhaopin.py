@@ -27,9 +27,20 @@ from urllib.parse import quote
 
 from ..models import ApplyResult, CollectResult, Job, MonitorResult, PageReadError
 from ..safety.policy import Denied, is_graceful_stop
+from . import apply_probe
 from .base import DriverContext, _ago
 
 SEARCH_URL = "https://www.zhaopin.com/jobs?kw={kw}"
+# 2026-10-13 实测：不带城市时智联按 IP 猜城市，返回的不是你要的城市 → 本地按城市过滤会把整页都丢掉
+# （那天下午「看到 20 个、20 个都被拦下」就是这个）。带上 jl=城市码，返回的就是这个城市的岗位。
+SEARCH_URL_CITY = "https://www.zhaopin.com/jobs?jl={city}&kw={kw}"
+
+# 智联城市码。上海 538 是 2026-10-13 实机核验的（20/20 都是上海、20/20 有岗位号）；
+# 其余来自智联公开的城市页链接，没有逐个实测 —— 表里没有的城市仍按旧办法（不带城市 + 本地过滤）。
+CITY_CODES: dict[str, str] = {
+    "上海": "538", "北京": "530", "广州": "763", "深圳": "765", "杭州": "653", "成都": "801",
+    "南京": "635", "武汉": "736", "西安": "854", "苏州": "639", "重庆": "551", "天津": "531",
+}
 JOB_URL = "https://www.zhaopin.com/jobdetail/{number}.htm"
 
 # 无限滚动：滚到底会追加卡片，不是翻页
@@ -83,7 +94,10 @@ JS_DETAIL = r"""
 """
 
 
-def search_url(keyword: str) -> str:
+def search_url(keyword: str, city: str = "") -> str:
+    code = CITY_CODES.get((city or "").strip())
+    if code:
+        return SEARCH_URL_CITY.format(city=code, kw=quote(keyword))
     return SEARCH_URL.format(kw=quote(keyword))
 
 
@@ -123,17 +137,20 @@ class ZhaopinDriver:
         page_obj = None
         detail_page = None
         detail_exhausted = False
+        # 有城市码的城市逐个搜（带 jl=）；没有城市码的，合成一次不带城市的搜索、再本地过滤（旧办法）
+        coded = [c for c in wanted if c in CITY_CODES]
+        targets = coded + ([""] if len(coded) < len(wanted) or not wanted else [])
         try:
-            for keyword in cfg.keywords:
-                slot = keyword
+            for keyword, city in ((k, c) for k in cfg.keywords for c in targets):
+                slot = f"{keyword}@{city}" if city else keyword
                 recent = ctx.skip_recently_collected(slot, 1)
                 if recent is not None:
                     result.skipped += 1
-                    ctx.log(f"[zhaopin] {keyword} {_ago(recent)}采过，跳过")
+                    ctx.log(f"[zhaopin] {city + '/' if city else ''}{keyword} {_ago(recent)}采过，跳过")
                     continue
                 ctx.stop.check()
                 ctx.reserve("collect_search")
-                url = search_url(keyword)
+                url = search_url(keyword, city)
                 if page_obj is None:
                     page_obj = ctx.browser.open(url)
                 else:
@@ -251,6 +268,15 @@ class ZhaopinDriver:
             ctx.stop.sleep(1.5)
         ctx.log(f"[zhaopin] 详情页 JD 容器为空，已跳过：{url}")
         return "", page
+
+    def probe_apply(self, ctx: DriverContext, job: Job) -> dict:
+        """投递预演：只打开岗位页看「申请职位」在不在、有没有风控，不点、不投。
+
+        旧项目留下的结论是「智联详情页有会话级风控，投递被封」（从没在新版上核验过），
+        所以智联要不要做投递，完全取决于这一步在真实页面上看到什么。
+        """
+        return apply_probe.probe(ctx, job, platform=self.key,
+                                 ready_selector=".describtion-card__content-wrap, .summary-plane, body", label="智联招聘")
 
     def apply(self, ctx: DriverContext, job: Job) -> ApplyResult:
         return ApplyResult(status="unsupported", detail="智联仅支持采集，请在平台内手动投递")
