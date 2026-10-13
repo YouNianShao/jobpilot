@@ -6,7 +6,7 @@
 - 岗位锚点 `a[data-nick="job-detail-job-info"]`
 - 公司 `[data-nick="job-detail-company-info"]`
 
-注意：详情页 2026-08 起 302 到 wow.liepin.com，未登录只给登录墙，故**不开详情页、JD 留空**。
+详情页：2026-08 记录过 302 到 wow.liepin.com 登录墙；2026-10-10 复测没有跳转、JD 正常加载（见 docs/05）。
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from ..models import ApplyResult, CollectResult, Job, MonitorResult, PageReadError
 from ..safety.policy import Denied, is_graceful_stop
+from . import apply_probe
 from .base import DriverContext, _ago
 
 SEARCH_URL = "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}"
@@ -195,6 +196,10 @@ class LiepinDriver:
             ctx.stop.sleep(1.5)
         ctx.log(f"[liepin] 详情页 JD 容器为空，已跳过：{url}")
         return "", page
+
+    def probe_apply(self, ctx: DriverContext, job: Job) -> dict:
+        """投递预演：只打开岗位页看「投个简历 / 立即投递」在不在，不点、不投。"""
+        return apply_probe.probe(ctx, job, platform=self.key, ready_selector=".job-intro-container, .job-apply-operate, body", label="猎聘")
 
     def apply(self, ctx: DriverContext, job: Job) -> ApplyResult:
         return ApplyResult(status="unsupported", detail="猎聘投递尚未实机核验")

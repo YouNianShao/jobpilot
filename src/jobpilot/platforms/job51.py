@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from ..models import ApplyResult, CollectResult, Job, MonitorResult, PageReadError
 from ..safety.policy import Denied, is_graceful_stop
+from . import apply_probe
 from .base import DriverContext, _ago
 
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={city}&keyword={kw}&searchType=2&keywordType=&page={page}"
@@ -216,7 +217,12 @@ class Job51Driver:
         ctx.log(f"[51job] 详情页 JD 容器为空，已跳过：{url}")
         return "", page
 
+    def probe_apply(self, ctx: DriverContext, job: Job) -> dict:
+        """投递预演：只打开岗位页看「申请」按钮在不在，不点、不投。证据够了才写真正的投递。"""
+        return apply_probe.probe(ctx, job, platform=self.key, ready_selector=".bmsg, .tHeader, body", label="前程无忧")
+
     def apply(self, ctx: DriverContext, job: Job) -> ApplyResult:
+        # 能力集里没有 apply：任务层会先拒绝，这里只是兜底。先用 probe_apply 在真机上把按钮核验清楚
         return ApplyResult(status="unsupported", detail="51job 投递尚未实机核验")
 
     def monitor(self, ctx: DriverContext) -> MonitorResult:

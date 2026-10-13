@@ -207,6 +207,8 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 platforms[key] = {
                     "name": driver.name,
                     "capabilities": sorted(driver.capabilities),
+                    # 能不能「投递预演（只看不点）」：智联还没做，界面就不显示这个按钮
+                    "can_probe": hasattr(driver, "probe_apply"),
                     "remaining": ctx.policy.remaining(key),
                     # 真正生效的上限（已解析每平台覆盖）+ 滚动窗口用量，界面据此画进度条
                     "limits": ctx.policy.limits_for(key),

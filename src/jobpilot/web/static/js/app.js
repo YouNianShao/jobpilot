@@ -22,7 +22,7 @@ const CAP_LABEL = { collect: '采集', apply: '投递', monitor: '监测' };
 const STAGES = ['collect_search', 'collect_detail', 'apply', 'monitor'];
 
 
-const capsOf = (platform) => (((state.status && state.status.platforms) || {})[platform] || {}).capabilities || [];
+const platformInfo = (platform) => ((state.status && state.status.platforms) || {})[platform] || {};
 const natureLabel = (key) => ((state.status && state.status.nature_labels) || {})[key] || key;
 const poolTotal = (counts) => (counts.new || 0) + (counts.pending_confirm || 0)
   + (counts.approved || 0) + (counts.applied || 0);
@@ -869,7 +869,7 @@ async function openJob(id) {
   prepBox.appendChild(prepResult);
   body.appendChild(prepBox);
 
-  if (capsOf(job.platform).includes('collect')) {
+  if (platformInfo(job.platform).can_probe) {
     // 预演：只打开岗位页看按钮在不在，不点、不发 —— 自动投递能不能开，先拿证据再决定
     const probeBox = el('div', { class: 'hint', style: 'margin-top:8px' });
     const probeBtn = el('button', {
