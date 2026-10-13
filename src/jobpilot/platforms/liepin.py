@@ -202,7 +202,13 @@ class LiepinDriver:
         return apply_probe.probe(ctx, job, platform=self.key, ready_selector=".job-intro-container, .job-apply-operate, body", label="猎聘")
 
     def apply(self, ctx: DriverContext, job: Job) -> ApplyResult:
-        return ApplyResult(status="unsupported", detail="猎聘投递尚未实机核验")
+        """一键投递：岗位页上的「投简历聊一聊」（2026-10-13 预演核验）= 投出简历并开启会话。
+
+        能力集里还没加 apply：第一次真实投递由你在旁边看着跑通之后才放开。
+        """
+        status, detail = apply_probe.click_apply(ctx, job, platform=self.key,
+                                                 ready_selector=".job-intro-container, .job-apply-operate, body", label="猎聘")
+        return ApplyResult(status=status, detail=detail)
 
     def monitor(self, ctx: DriverContext) -> MonitorResult:
         return MonitorResult()

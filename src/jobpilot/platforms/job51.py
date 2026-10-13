@@ -222,8 +222,13 @@ class Job51Driver:
         return apply_probe.probe(ctx, job, platform=self.key, ready_selector=".bmsg, .tHeader, body", label="前程无忧")
 
     def apply(self, ctx: DriverContext, job: Job) -> ApplyResult:
-        # 能力集里没有 apply：任务层会先拒绝，这里只是兜底。先用 probe_apply 在真机上把按钮核验清楚
-        return ApplyResult(status="unsupported", detail="51job 投递尚未实机核验")
+        """一键投递：岗位页上的「立即投递」（2026-10-13 预演核验：两个按钮，文字都是「立即投递」）。
+
+        能力集里还没加 apply：第一次真实投递由你在旁边看着跑通之后才放开，在那之前任务层会先拒绝。
+        """
+        status, detail = apply_probe.click_apply(ctx, job, platform=self.key,
+                                                 ready_selector=".bmsg, .tHeader, body", label="前程无忧")
+        return ApplyResult(status=status, detail=detail)
 
     def monitor(self, ctx: DriverContext) -> MonitorResult:
         return MonitorResult()
