@@ -49,6 +49,9 @@ class PlatformCfg(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     max_pages: int = Field(default=3, ge=1, le=20)
     apply: bool = False
+    # 这个平台每天最多投几个（空 = 只受全局「每日投递上限」约束）。
+    # 账号风险是按平台算的：新开放的平台先给小额度，跑稳了再加；全局上限仍然是所有平台合计的硬顶。
+    daily_limit: int | None = Field(default=None, ge=1, le=200)
     # 是否打开详情页抓 JD。每个岗位 = 一次详情页开页（占页面预算），所以默认关闭。
     # 开了它 AI 评分明显更准；不开就只能靠标题+标签+薪资判断。
     fetch_detail: bool = False

@@ -250,3 +250,32 @@ def test_empty_active_windows_means_no_limit(policy):
     policy.authorize(Action(kind=PAGE_OPEN, platform="boss", stage="collect_search"))
 
     assert policy.budget.used("boss", "collect_search") == 1
+
+
+def test_per_platform_daily_apply_limit(tmp_path):
+    """每个平台各自的每日投递上限：平台到顶只停这个平台，全局上限仍是所有平台合计的硬顶。"""
+    from conftest import open_time_gates
+
+    from jobpilot.config import AppConfig
+    from jobpilot.db import Repo, connect
+    from jobpilot.models import Job
+    from jobpilot.safety.policy import APPLY_ONE, Action, Denied, Policy
+
+    cfg = open_time_gates(AppConfig())
+    cfg.safety.delivery_cooldown_min_minutes = cfg.safety.delivery_cooldown_max_minutes = 0
+    cfg.apply.daily_limit = 5
+    cfg.platforms["51job"].daily_limit = 2
+    repo = Repo(connect(tmp_path / "t.db"))
+    policy = Policy(repo, cfg)
+    for i, plat in enumerate(["51job", "51job", "boss"]):
+        repo.upsert_job(Job(id=f"{plat}-{i}", platform=plat, external_id=str(i), title="t", company="c"))
+        repo.add_event(f"{plat}-{i}", "applied", "applied")
+
+    with pytest.raises(Denied, match="51job"):
+        policy.authorize(Action(kind=APPLY_ONE, platform="51job"))      # 51job 已投 2 = 到顶
+    policy.authorize(Action(kind=APPLY_ONE, platform="boss"))          # boss 没设平台上限，只看全局 3/5
+    assert policy.remaining_applies("51job") == 0
+    assert policy.remaining_applies("boss") == 2
+    assert policy.limits_for("51job")["daily_limit"] == 2
+    cfg.platforms["liepin"].daily_limit = 50                           # 平台上限不能超过全局
+    assert policy.limits_for("liepin")["daily_limit"] == 5

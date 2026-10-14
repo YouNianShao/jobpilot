@@ -178,6 +178,10 @@ function renderConfig() {
 
     const shortRow = el('div', { class: 'frow-fields' });
     shortRow.appendChild(configField('platforms.' + key + '.max_pages', '页数上限（智联是"滚动批数"）', 'number', plat.max_pages ?? 3));
+    // 每个平台自己的每日投递上限：留空 = 只受「投递」分组里的全局上限（所有平台合计）约束
+    const capField = configField('platforms.' + key + '.daily_limit', '这个平台每天最多投几个（留空 = 不单独限制）', 'number', plat.daily_limit ?? '');
+    capField.querySelector('input').placeholder = '不单独限制';
+    shortRow.appendChild(capField);
     body.appendChild(shortRow);
 
     const wideRow = el('div', { class: 'frow-wide' });
@@ -346,6 +350,11 @@ async function saveConfig() {
       apply: $('cfg::platform.apply').checked,
       fetch_detail: $('cfg::platform.fetch_detail').checked,
       max_pages: Number($('cfg::platforms.' + state.cfgPlatform + '.max_pages').value),
+      // 空 = 不单独限制（null）；后端按 section 整段覆盖，这个键不带上，保存一次就会被抹掉
+      daily_limit: (() => {
+        const raw = String(($('cfg::platforms.' + state.cfgPlatform + '.daily_limit') || {}).value || '').trim();
+        return raw === '' ? null : Number(raw);
+      })(),
       cities: splitList(($('cfg::platform.cities') || {}).value),
       keywords: splitList($('cfg::platform.keywords').value),
     });

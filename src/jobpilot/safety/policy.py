@@ -147,6 +147,11 @@ class Policy:
                         f"今日已投递 {applied} 个，达上限 {self.config.apply.daily_limit}",
                         platform,
                     )
+                cap = self.platform_daily_limit(platform)
+                if cap is not None:
+                    done = self.repo.count_applied_today(platform)
+                    if done >= cap:
+                        raise Denied("daily_limit", f"{platform} 今日已投递 {done} 个，达这个平台的上限 {cap}", platform)
             cooldown = self.cooldown_remaining(platform)
             if cooldown > 0:
                 raise Denied(
@@ -448,13 +453,25 @@ class Policy:
     def applied_today(self) -> int:
         return self.repo.count_events_today("applied")
 
+    def platform_daily_limit(self, platform: str) -> int | None:
+        cfg = self.config.platforms.get(platform)
+        return getattr(cfg, "daily_limit", None) if cfg is not None else None
+
+    def remaining_applies(self, platform: str) -> int:
+        """这个平台今天还能投几个：取「全局剩余」和「平台剩余」里小的那个。"""
+        left = max(0, self.config.apply.daily_limit - self.applied_today())
+        cap = self.platform_daily_limit(platform)
+        if cap is not None:
+            left = min(left, max(0, cap - self.repo.count_applied_today(platform)))
+        return left
+
     def remaining(self, platform: str) -> dict[str, int]:
         return {
             "collect_search": self.budget.remaining(platform, "collect_search"),
             "collect_detail": self.budget.remaining(platform, "collect_detail"),
             "apply": self.budget.remaining(platform, "apply"),
             "monitor": self.budget.remaining(platform, "monitor"),
-            "daily_limit": max(0, self.config.apply.daily_limit - self.applied_today()),
+            "daily_limit": self.remaining_applies(platform),
         }
 
     def limits_for(self, platform: str) -> dict[str, int | float]:
@@ -472,7 +489,9 @@ class Policy:
             "total": pages.total,
             "per_10min": self.config.safety.per_10min_for(platform),
             "per_hour": self.config.safety.per_hour_for(platform),
-            "daily_limit": int(self.config.apply.daily_limit),
+            # 这个平台真正的每日投递上限：平台自己设了就用它（但不会超过全局），没设就是全局
+            "daily_limit": int(min(self.platform_daily_limit(platform) or self.config.apply.daily_limit,
+                                   self.config.apply.daily_limit)),
             "risk_lock_minutes": int(self.config.safety.lock_minutes_for(platform)),
             "multiplier": float(self.config.safety.multiplier_for(platform)),
         }

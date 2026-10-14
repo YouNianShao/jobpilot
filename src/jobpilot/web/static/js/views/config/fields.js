@@ -135,6 +135,7 @@ function fieldProblem(path, raw, type) {
   const value = String(raw ?? '').trim();
   const rule = ruleFor(path) || {};
   if (type === 'number' || rule.type === 'int' || rule.type === 'float') {
+    if (value === '' && path.startsWith('platforms.') && path.endsWith('.daily_limit')) return '';   // 平台上限可以留空
     if (value === '') return '必填，需要一个数字';
     const num = Number(value);
     if (!Number.isFinite(num)) return '需要填数字';
@@ -285,7 +286,10 @@ export function validateConfigForm() {
   for (const group of GROUPS) {
     for (const [path, , type] of group.fields) check(path, type);
   }
-  if (state.cfgPlatform) check('platforms.' + state.cfgPlatform + '.max_pages', 'number');
+  if (state.cfgPlatform) {
+    check('platforms.' + state.cfgPlatform + '.max_pages', 'number');
+    check('platforms.' + state.cfgPlatform + '.daily_limit', 'number');
+  }
   if (!first) {
     for (const [low, high] of CROSS_RULES) {
       const cross = crossProblem(low);

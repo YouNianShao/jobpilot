@@ -586,6 +586,16 @@ class Repo:
             ).fetchone()[0]
         )
 
+    def count_applied_today(self, platform: str) -> int:
+        """今天在某个平台投出去的数（events 没有平台列，按岗位所属平台算）。"""
+        return int(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM events e JOIN jobs j ON j.id = e.job_id "
+                "WHERE e.kind = 'applied' AND j.platform = ? AND date(e.created_at) = date('now','localtime')",
+                (platform,),
+            ).fetchone()[0]
+        )
+
     def count_events_today(self, kind: str) -> int:
         return int(
             self.conn.execute(

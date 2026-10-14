@@ -28,7 +28,7 @@ def mark_applied(ctx: ServiceContext, job_id: str, *, note: str = "") -> dict:
     ctx.repo.add_event(job_id, "applied", "manual")   # 与自动投递同一个计数口径
     return {
         "ok": True, "job_id": job_id, "title": job.title,
-        "remaining_today": max(0, ctx.config.apply.daily_limit - ctx.policy.applied_today()),
+        "remaining_today": ctx.policy.remaining_applies(job.platform),
     }
 
 
