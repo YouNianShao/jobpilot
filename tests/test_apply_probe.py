@@ -215,3 +215,31 @@ def test_login_form_captcha_words_mean_login_not_risk(tmp_path):
     job = Job(id="zhaopin-1", platform="zhaopin", external_id="1", title="t", company="c", url=url)
     report = ZhaopinDriver().probe_apply(ctx, job)
     assert report["need_login"] is True and report["risk"] == "login_required" and "登录" in report["verdict"]
+
+
+def test_51job_unclear_click_is_verified_on_my_apply_page(tmp_path):
+    """2026-10-14 真机：点完没有可识别的成功提示，但「我的申请」里有 —— 核对后算投递成功，且只点了一次。"""
+    from jobpilot.platforms.job51 import in_apply_list
+
+    url = JOB51_URL.format(job_id="173756213")
+    job_page = ScriptedPage(url, BEFORE, [{"popups": [], "buttons": ["立即投递"]}])
+    my_apply = FakePage(url=Job51Driver.MY_APPLY_URL, selector_text={"body": ""},
+                        text="全部 / 数据专员（电商）(J12711) / 8千-1.2万 / 立即沟通 / 上海上药龙虎医药销售有限公司 / 上海-静安区 / 申请于2026-10-14")
+    ctx, _ = ctx_for(tmp_path, "51job", job_page)
+    ctx.browser.pages.append(my_apply)
+    job = Job(id="51job-173756213", platform="51job", external_id="173756213", title="数据专员（电商）(J12711)",
+              company="上海上药龙虎医药销售有限公司", url=url)
+    result = Job51Driver().apply(ctx, job)
+    assert result.status == "applied" and "核实" in result.detail
+    assert job_page.click_count == 1                                   # 核对不会再点
+    assert not in_apply_list(my_apply.text(), "数据专员（电商）(J12711)", "别的公司")
+
+
+def test_51job_unclear_click_not_in_my_apply_stays_failed(tmp_path):
+    url = JOB51_URL.format(job_id="1")
+    job_page = ScriptedPage(url, BEFORE, [{"popups": [], "buttons": ["立即投递"]}])
+    my_apply = FakePage(url=Job51Driver.MY_APPLY_URL, selector_text={"body": ""}, text="全部 / 别的岗位 / 别的公司")
+    ctx, _ = ctx_for(tmp_path, "51job", job_page)
+    ctx.browser.pages.append(my_apply)
+    job = Job(id="51job-1", platform="51job", external_id="1", title="数据专员", company="某公司", url=url)
+    assert Job51Driver().apply(ctx, job).status == "failed"

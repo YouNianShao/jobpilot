@@ -121,6 +121,22 @@ class DriverContext:
             self.log(f"[safety] 放慢节奏：等了 {permit.waited_seconds:.0f} 秒再开下一页")
 
 
+def explain_missing(page, label: str) -> None:
+    """页面上没等到预期内容时调用：先判断是不是风控 / 登录墙，是就按那个抛（会锁平台 / 提示登录），
+    都不是才算「页面异常」。以前前程无忧 / 猎聘 / 智联直接抛页面异常 —— 智联整页被换成腾讯云的
+    人机验证（2026-10-14）时，系统只把它当「改版或加载慢」，还会接着开页面。
+    """
+    from ..models import LoginRequired, PageReadError, PlatformRisk
+    from ..safety.risk import classify_risk
+
+    kind = classify_risk(page.text(), page.url)
+    if kind == "login_required":
+        raise LoginRequired(f"{label} 需要登录")
+    if kind:
+        raise PlatformRisk(kind, label)
+    raise PageReadError(f"{label} 未找到预期内容（可能改版或被拦截）")
+
+
 def _ago(seconds: float) -> str:
     """把"多久前"说成人话（0 秒是合法的：同一秒内又点了一次采集）。"""
     if seconds < 60:

@@ -206,3 +206,12 @@ def test_pacing_carries_over_to_the_next_task(tmp_path):
     second = Policy(first.repo, first.config, sleep=waits.append)
     open_search(second)
     assert waits and 4.0 < waits[0] <= 5.0
+
+
+def test_connection_security_challenge_page_is_captcha():
+    """2026-10-14 智联：整页换成腾讯云的「正在验证连接安全性」——以前识别不出来，会接着开页面。"""
+    from jobpilot.safety.risk import classify_risk
+
+    page = ("www.zhaopin.com 正在验证连接安全性，请勾选下方复选框。 验证完成后，您将被重定向到 www.zhaopin.com。"
+            " uuid: 1481301406129700129 Protected by Tencent Cloud")
+    assert classify_risk(page, "https://www.zhaopin.com/jobs?jl=538&kw=AI") == "captcha"

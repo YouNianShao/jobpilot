@@ -15,6 +15,9 @@ RISK_TEXT: dict[str, tuple[str, ...]] = {
         "请完成验证", "完成安全验证", "安全验证", "拖动滑块",
         "点击完成验证", "人机验证", "滑块验证", "滑动验证",
         "验证码", "校验码",
+        # 2026-10-14 智联实测：腾讯云 / Cloudflare 的「连接安全性」挑战页（整页替换，没有岗位内容）
+        "正在验证连接安全性", "验证连接安全性", "请勾选下方复选框", "Protected by Tencent Cloud",
+        "Checking if the site connection is secure", "Verify you are human",
     ),
     "rate_limit": (
         "操作过于频繁", "访问过于频繁", "请求过于频繁", "访问速度过快",

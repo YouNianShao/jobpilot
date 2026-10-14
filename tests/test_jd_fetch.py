@@ -111,3 +111,17 @@ def test_zhaopin_fetches_jd_when_enabled(tmp_path):
     saved = ctx.repo.list_jobs(platform="zhaopin")
     assert saved and saved[0].jd == JD_TEXT
     assert saved[0].url.endswith("CCL1493228500J40928543912.htm")
+
+
+def test_challenge_page_on_search_is_a_risk_not_a_page_error(tmp_path):
+    """智联 2026-10-14：搜索页整页变成腾讯云人机验证。必须按风控停手（会锁平台），不能当「页面异常」接着开页面。"""
+    import pytest
+
+    from jobpilot.models import PlatformRisk
+
+    page = FakePage(url=zp_search("数据分析", "上海"), selector_text={},
+                    text="正在验证连接安全性，请勾选下方复选框。 Protected by Tencent Cloud")
+    ctx = make_ctx(tmp_path, FakeBrowser([page]), "zhaopin", fetch_detail=False)
+    with pytest.raises(PlatformRisk) as exc:
+        ZhaopinDriver().collect(ctx)
+    assert exc.value.kind == "captcha"

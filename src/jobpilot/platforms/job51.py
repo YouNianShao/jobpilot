@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
-from ..models import ApplyResult, CollectResult, Job, MonitorResult, PageReadError
+from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago
+from .base import DriverContext, _ago, explain_missing
 
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={city}&keyword={kw}&searchType=2&keywordType=&page={page}"
 # 2026-10-10 实机验证：列表里的公司链接路径段是 /all/，岗位详情同一段可用
@@ -83,6 +83,19 @@ def parse_list(raw) -> list[dict]:
     return []
 
 
+def in_apply_list(text: str, title: str, company: str) -> bool:
+    """「我的申请」页正文里，标题和公司挨在一起出现（同一条记录）才算投过。"""
+    title, company = (title or "").strip(), (company or "").strip()
+    if not title or not company or not text:
+        return False
+    start = text.find(title)
+    while start >= 0:
+        if company in text[start: start + len(title) + 200]:
+            return True
+        start = text.find(title, start + 1)
+    return False
+
+
 def make_job_id(raw: dict) -> str:
     job_id = str(raw.get("jobId") or "").strip()
     if job_id:
@@ -139,7 +152,7 @@ class Job51Driver:
                         else:
                             page_obj.goto(url)
                         if not page_obj.wait_for(".joblist-item", timeout_ms=12000):
-                            raise PageReadError(f"[51job] 搜索页无结果容器 {city}/{keyword}")
+                            explain_missing(page_obj, f"[51job] 搜索页 {city}/{keyword}")
 
                         items = parse_list(page_obj.eval(JS_LIST))
                         if not items:
@@ -228,7 +241,31 @@ class Job51Driver:
         """
         status, detail = apply_probe.click_apply(ctx, job, platform=self.key,
                                                  ready_selector=".bmsg, .tHeader, body", label="前程无忧")
+        if status == "failed":
+            # 2026-10-14 实测：点完「立即投递」页面上没有可识别的成功提示，但其实投成功了
+            # （「我的申请」里有这条）。所以看不出结果时去「我的申请」核对一次，**不再点任何按钮**。
+            if self._in_my_applications(ctx, job):
+                return ApplyResult(status="applied", detail="点了「立即投递」，已在「我的申请」里核实")
         return ApplyResult(status=status, detail=detail)
+
+    MY_APPLY_URL = "https://i.51job.com/userset/my_apply.php?lang=c"
+
+    def _in_my_applications(self, ctx: DriverContext, job: Job) -> bool:
+        """打开「我的申请」，看这个岗位（标题 + 公司挨在一起）在不在。只读。"""
+        ctx.reserve("apply")                      # 核对也是开页面：记在投递额度上、过同一道闸门
+        page = ctx.browser.open(self.MY_APPLY_URL)
+        try:
+            page.wait_for("body", timeout_ms=15000)
+            for _ in range(3):                    # 列表是异步加载的，等一会儿再读
+                ctx.stop.sleep(2)
+                if in_apply_list(page.text(), job.title, job.company):
+                    return True
+            return False
+        finally:
+            try:
+                page.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def monitor(self, ctx: DriverContext) -> MonitorResult:
         return MonitorResult()

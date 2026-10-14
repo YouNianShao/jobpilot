@@ -25,10 +25,10 @@ import json
 import time
 from urllib.parse import quote
 
-from ..models import ApplyResult, CollectResult, Job, MonitorResult, PageReadError
+from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago
+from .base import DriverContext, _ago, explain_missing
 
 SEARCH_URL = "https://www.zhaopin.com/jobs?kw={kw}"
 # 2026-10-13 实测：不带城市时智联按 IP 猜城市，返回的不是你要的城市 → 本地按城市过滤会把整页都丢掉
@@ -156,7 +156,7 @@ class ZhaopinDriver:
                 else:
                     page_obj.goto(url)
                 if not page_obj.wait_for(".job-card", timeout_ms=12000):
-                    raise PageReadError(f"[zhaopin] 搜索页无结果容器 {keyword}")
+                    explain_missing(page_obj, f"[zhaopin] 搜索页 {keyword}")
 
                 processed: set[str] = set()
                 cards = 0

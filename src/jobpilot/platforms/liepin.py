@@ -14,10 +14,10 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
-from ..models import ApplyResult, CollectResult, Job, MonitorResult, PageReadError
+from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago
+from .base import DriverContext, _ago, explain_missing
 
 SEARCH_URL = "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}"
 JOB_URL = "https://www.liepin.com/job/{job_id}.shtml"
@@ -119,7 +119,7 @@ class LiepinDriver:
                     else:
                         page_obj.goto(url)
                     if not page_obj.wait_for('[data-nick="job-detail-job-info"]', timeout_ms=12000):
-                        raise PageReadError(f"[liepin] 搜索页无结果容器 {keyword}")
+                        explain_missing(page_obj, f"[liepin] 搜索页 {keyword}")
 
                     items = parse_list(page_obj.eval(JS_LIST))
                     if not items:
