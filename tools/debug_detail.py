@@ -15,7 +15,7 @@ TARGETS = [
      ".describtion-card__content-wrap, .seo-card__content"),
 ]
 
-browser = create_browser("http://127.0.0.1:9222")
+browser = create_browser("http://127.0.0.1:9333")
 for name, url, selector in TARGETS:
     print("=" * 60)
     print(name, url)

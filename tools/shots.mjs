@@ -2,7 +2,7 @@
 // 用法: node tools/shots.mjs [outDir] [width] [height]
 import { writeFileSync, mkdirSync } from 'node:fs';
 
-const PORT = process.env.CDP_PORT || '9222';
+const PORT = process.env.CDP_PORT || '9333';
 const BASE = `http://127.0.0.1:${PORT}`;
 const START_URL = process.env.SHOT_URL || 'http://127.0.0.1:8700/';
 const outDir = process.argv[2] || 'data/shots';

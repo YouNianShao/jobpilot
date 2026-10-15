@@ -17,7 +17,7 @@ from jobpilot.config import CONFIG_PATH, AiCfg, AppConfig, ProfileCfg, load_conf
 
 def main() -> int:
     src = Path(sys.argv[1] if len(sys.argv) > 1 else r"E:\JobPilot-v1\config.yaml")
-    cdp = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:9222"
+    cdp = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:9333"
 
     cfg: AppConfig = load_config()
     if src.exists():

@@ -1,6 +1,7 @@
 /* 配置页的字段：字段清单（哪一组有哪些配置项）、单个输入框、实时校验。
    加 / 改一个配置项只需要动这个文件。 */
 
+import { get } from '../../api.js';
 import { $, state } from '../../store.js';
 import { clear, el, icon } from '../../ui.js';
 
@@ -24,8 +25,7 @@ export const GROUPS = [
     fields: [
       ['scoring.threshold', '评分阈值', 'number'],
       ['scoring.concurrency', '评分并发(1-3)', 'number'],
-      ['profile.salary_min', '薪资下限(千)', 'number'],
-      ['profile.salary_max', '薪资上限(千，0=不限)', 'number'],
+      ['profile.salary_min', '月薪范围', 'salary', true],
       ['profile.deal_breakers', '排除词(逗号分隔)', 'list'],
       ['profile.block_natures', '评分前直接剔除（不勾 = 只标记、不剔除）', 'natures', true],
     ],
@@ -76,8 +76,8 @@ export const GROUPS = [
       ['safety.max_pages_per_hour', '每小时页面上限(0=不限)', 'number'],
       ['safety.rate_wait_max_seconds', '超速时最多自动等多久(秒)', 'number'],
       ['safety.day_off_probability', '随机休息日概率(0-1)', 'number'],
-      ['safety.send_windows', '允许发送的时段(逗号分隔)', 'list'],
-      ['safety.active_windows', '允许开页面的时段(逗号分隔，空=不限)', 'list'],
+      ['safety.send_windows', '允许投递的时段', 'windows'],
+      ['safety.active_windows', '允许开页面的时段', 'windows'],
       ['safety.daily_pages.collect_search', '每日搜索页预算', 'number'],
       ['safety.daily_pages.collect_detail', '每日详情页预算', 'number'],
       ['safety.daily_pages.apply', '每日投递页预算', 'number'],
@@ -136,6 +136,7 @@ function fieldProblem(path, raw, type) {
   const rule = ruleFor(path) || {};
   if (type === 'number' || rule.type === 'int' || rule.type === 'float') {
     if (value === '' && path.startsWith('platforms.') && path.endsWith('.daily_limit')) return '';   // 平台上限可以留空
+    if (value === '' && (path === 'profile.salary_min' || path === 'profile.salary_max')) return '';   // 薪资留空 = 不限
     if (value === '') return '必填，需要一个数字';
     const num = Number(value);
     if (!Number.isFinite(num)) return '需要填数字';
@@ -148,7 +149,7 @@ function fieldProblem(path, raw, type) {
     if (bad) return '「' + bad + '」不是 HH:MM-HH:MM 格式，例如 08:00-22:00';
   }
   if (path === 'ai.base_url' && value && !/^https?:\/\//i.test(value)) return '要以 http:// 或 https:// 开头';
-  if (path === 'browser.cdp_url' && value && !/^https?:\/\/[^/\s]+/i.test(value)) return '形如 http://127.0.0.1:9222';
+  if (path === 'browser.cdp_url' && value && !/^https?:\/\/[^/\s]+/i.test(value)) return '形如 http://127.0.0.1:9333';
   return '';
 }
 
@@ -250,6 +251,8 @@ export function readNatures(path) {
 
 export function configField(path, label, type, value, wide) {
   if (type === 'provider') return providerField(path, label, value);
+  if (type === 'windows') return windowsField(path, label, value);
+  if (type === 'salary') return salaryField(label);
   if (type === 'natures') return naturesField(path, label, value);
   // 'list' 是我们自己的字段类型，不是合法的 <input type>：写进去浏览器会退回原生样式，一律落成 text
   const inputType = type === 'number' || type === 'password' ? type : 'text';
@@ -304,4 +307,108 @@ export function focusField(path) {
   if (!input) return;
   input.scrollIntoView({ behavior: 'smooth', block: 'center' });
   setTimeout(() => input.focus({ preventScroll: true }), 300);
+}
+
+
+/* 时段：每一段是「从 [下拉] 到 [下拉]」，可以加多段。
+   以前是手敲「08:00-22:00」的文本框：难看，还容易写错（写成 08:00-00:00 被当成一分钟都不开）。
+   值仍然存成同一个 hidden input（逗号分隔），保存 / 校验走原来 'list' 的那条路。 */
+const HALF_HOURS = Array.from({ length: 49 }, (_, i) => String(Math.floor(i / 2)).padStart(2, '0') + ':' + (i % 2 ? '30' : '00'));
+
+function timeSelect(value, { end, label }) {
+  const select = el('select', { class: 'select', 'aria-label': label });
+  const options = HALF_HOURS.filter((t) => (end ? t !== '00:00' : t !== '24:00'));
+  if (value && !options.includes(value)) options.push(value);          // 配置里写过的非整点 / 半点也照样显示
+  options.sort();
+  for (const t of options) select.appendChild(el('option', { value: t, text: t }));
+  select.value = value || (end ? '22:00' : '08:00');
+  return select;
+}
+
+function windowsField(path, label, value) {
+  const hidden = el('input', { type: 'hidden', id: 'cfg::' + path });
+  const list = el('div', { class: 'win-list' });
+  const empty = el('div', { class: 'win-empty muted small', text: path === 'safety.active_windows' ? '不限时段：全天都可以开页面' : '没有设时段：全天都可以投递' });
+  const addBtn = el('button', { class: 'link small', type: 'button', text: '+ 加一段' });
+  const sync = () => {
+    const parts = Array.from(list.querySelectorAll('.win-row')).map((row) => {
+      const [a, b] = row.querySelectorAll('select');
+      return a.value + '-' + b.value;
+    });
+    hidden.value = parts.join(',');
+    empty.hidden = parts.length > 0;
+    for (const row of list.querySelectorAll('.win-row')) {
+      const [a, b] = row.querySelectorAll('select');
+      const tip = row.querySelector('.win-tip');
+      const s = a.value; const e = b.value === '00:00' ? '24:00' : b.value;
+      tip.textContent = e === s ? '一分钟都不开' : (e < s ? '跨夜' : '');
+      tip.title = e === s ? '开始和结束一样：这一段一分钟都不开' : (e < s ? '结束比开始早：跨过半夜，到第二天' : '');
+      tip.className = 'win-tip small ' + (e === s ? 'bad' : 'muted');
+    }
+    hidden.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const addRow = (start, finish) => {
+    const a = timeSelect(start, { label: label + ' 开始' });
+    const b = timeSelect(finish === '00:00' ? '24:00' : finish, { end: true, label: label + ' 结束' });
+    const row = el('div', { class: 'win-row' }, [
+      el('span', { class: 'muted small', text: '从' }), a, el('span', { class: 'muted small', text: '到' }), b,
+      el('span', { class: 'win-tip small' }),
+      el('button', { class: 'chip-x', type: 'button', 'aria-label': '删掉这一段', onclick: () => { row.remove(); sync(); } }, [icon('x')]),
+    ]);
+    a.addEventListener('change', sync); b.addEventListener('change', sync);
+    list.appendChild(row);
+  };
+  for (const part of String(value || '').split(/[,，;；\s]+/).filter(Boolean)) {
+    const m = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(part);
+    if (m) addRow(m[1].padStart(5, '0'), m[2].padStart(5, '0'));
+  }
+  addBtn.addEventListener('click', () => { addRow(null, null); sync(); });
+  sync();
+  return el('div', { class: 'field' }, [
+    // 「加一段」放在标题行右边：字段高度和旁边的输入框对齐，不多占一行
+    el('span', { class: 'field-meta' }, [el('span', { class: 'label', text: label }), addBtn]),
+    hidden, list, empty,
+  ]);
+}
+
+
+/* 月薪范围：「[最低] K 到 [最高] K」一行写完，空 = 不限；旁边实时写出按这个范围岗位池里会筛掉多少。
+   以前是「薪资下限(千)」「薪资上限(千，0=不限)」两个分开的数字框，用户找不到、也不知道 0 是什么意思。
+   两个 input 的 id 不变（cfg::profile.salary_min / salary_max），保存、交叉校验照旧。 */
+function salaryField(label) {
+  const prof = (state.config && state.config.profile) || {};
+  const box = (path, value, placeholder) => {
+    const input = el('input', { type: 'number', id: 'cfg::' + path, min: '0', step: '1', inputMode: 'numeric', placeholder });
+    input.value = Number(value) > 0 ? String(value) : '';
+    return input;
+  };
+  const low = box('profile.salary_min', prof.salary_min, '不限');
+  const high = box('profile.salary_max', prof.salary_max, '不限');
+  const preview = el('div', { class: 'hint' });
+  let timer = null;
+  const update = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const lo = Number(low.value) || 0; const hi = Number(high.value) || 0;
+      if (hi && lo > hi) { preview.className = 'hint warn'; preview.textContent = '最高不能低于最低'; return; }
+      if (!lo && !hi) { preview.className = 'hint'; preview.textContent = '不限薪资：所有岗位都进评分'; return; }
+      const res = await get('/api/salary-preview?low=' + lo + '&high=' + hi);
+      if (res.error) { preview.textContent = ''; return; }
+      const parts = [];
+      if (res.below) parts.push(res.below + ' 个低于 ' + lo + 'K');
+      if (res.above) parts.push(res.above + ' 个高于 ' + hi + 'K');
+      preview.className = 'hint';
+      preview.textContent = '按现在岗位池的 ' + res.total + ' 个岗位算：' + res.inside + ' 个在范围内'
+        + (parts.length ? '，' + parts.join('、') + '，这些在评分前直接筛掉' : '')
+        + (res.unknown ? '；' + res.unknown + ' 个没写薪资 / 面议，照样进评分' : '');
+    }, 250);
+  };
+  low.addEventListener('input', update); high.addEventListener('input', update);
+  update();
+  return el('div', { class: 'field wide' }, [
+    el('span', { class: 'field-meta' }, [el('span', { class: 'label', text: label }),
+      el('span', { text: '按月薪算，单位 K（千元）；年薪、日薪会自动折算' })]),
+    el('div', { class: 'salary-row' }, [low, el('span', { class: 'muted', text: 'K 到' }), high, el('span', { class: 'muted', text: 'K' })]),
+    preview,
+  ]);
 }

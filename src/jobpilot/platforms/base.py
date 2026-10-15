@@ -137,6 +137,25 @@ def explain_missing(page, label: str) -> None:
     raise PageReadError(f"{label} 未找到预期内容（可能改版或被拦截）")
 
 
+def stop_if_risky(page, label: str) -> None:
+    """详情页没等到 JD 时调用：是风控 / 登录墙就抛（停手、锁平台），不是才允许「跳过这一个、接着下一个」。
+
+    2026-10-15：猎聘 / 前程无忧 / 智联的详情页拿不到 JD 时只记一句「已跳过」就去开下一页，
+    从不看这一页是不是验证码 / 访问频繁 —— 平台已经开始拦了，我们还在一页接一页地往上撞。
+    """
+    from ..models import LoginRequired, PlatformRisk
+    from ..safety.risk import classify_risk
+
+    try:
+        kind = classify_risk(page.text(), page.url)
+    except Exception:  # noqa: BLE001 - 页面读不出来就当普通失败，交给连续失败计数
+        return
+    if kind == "login_required":
+        raise LoginRequired(f"{label} 需要登录")
+    if kind:
+        raise PlatformRisk(kind, f"{label}出现风控信号")
+
+
 def _ago(seconds: float) -> str:
     """把"多久前"说成人话（0 秒是合法的：同一秒内又点了一次采集）。"""
     if seconds < 60:

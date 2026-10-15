@@ -28,7 +28,7 @@ from urllib.parse import quote
 from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago, explain_missing
+from .base import DriverContext, _ago, explain_missing, stop_if_risky
 
 SEARCH_URL = "https://www.zhaopin.com/jobs?kw={kw}"
 # 2026-10-13 实测：不带城市时智联按 IP 猜城市，返回的不是你要的城市 → 本地按城市过滤会把整页都丢掉
@@ -258,6 +258,7 @@ class ZhaopinDriver:
         else:
             page.goto(url)
         if not page.wait_for(".describtion-card__content-wrap, .seo-card__content", timeout_ms=18000):
+            stop_if_risky(page, "[zhaopin] 详情页")     # 是验证码 / 访问频繁就停手，不是才跳过这一个
             ctx.log(f"[zhaopin] 详情页没等到 JD 容器，已跳过：{url}")
             return "", page
         # 容器先出现、正文后渲染的情况很常见：轮询直到拿到非空文本，避免白花一次开页额度
@@ -266,6 +267,7 @@ class ZhaopinDriver:
             if text:
                 return text, page
             ctx.stop.sleep(1.5)
+        stop_if_risky(page, "[zhaopin] 详情页")
         ctx.log(f"[zhaopin] 详情页 JD 容器为空，已跳过：{url}")
         return "", page
 

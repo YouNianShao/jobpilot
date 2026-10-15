@@ -72,10 +72,10 @@ def test_checks_treat_missing_key_or_resume_as_hard_failures(tmp_path):
 
 def test_checks_flag_unsupported_apply_switch(tmp_path):
     ctx = make_ctx(tmp_path)
-    ctx.config.platforms["51job"].apply = True     # 开关开着，但驱动没声明 apply
+    ctx.config.platforms["zhaopin"].apply = True   # 开关开着，但驱动没声明 apply（智联仍只有采集）
 
     report = run_checks(ctx)
 
     rows = _by_key(report)
     assert rows["apply_switch"]["ok"] is False
-    assert "51job" in rows["apply_switch"]["detail"]
+    assert "zhaopin" in rows["apply_switch"]["detail"]

@@ -12,7 +12,12 @@ _WINDOW = re.compile(r"(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})")
 
 
 def parse_windows(spec) -> list[tuple[int, int]]:
-    """把 "09:00-21:00" 或 ["09:00-12:00","14:00-21:00"] 解析成分钟区间。"""
+    """把 "09:00-21:00" 或 ["09:00-12:00","14:00-21:00"] 解析成分钟区间。
+
+    结束时间写 00:00 = 到半夜十二点（"08:00-00:00" 就是 08:00-24:00）；
+    结束比开始早 = 跨过半夜（"22:00-02:00" 拆成 22:00-24:00 和 00:00-02:00）。
+    以前这两种都被当成「一分钟都不开」，用户改完时间窗还是被拦（2026-10-14）。
+    """
     if not spec:
         return []
     parts = [p for p in re.split(r"[,;，；\s]+", spec) if p] if isinstance(spec, str) else [str(p) for p in spec]
@@ -20,7 +25,14 @@ def parse_windows(spec) -> list[tuple[int, int]]:
     for part in parts:
         for m in _WINDOW.finditer(part):
             sh, sm, eh, em = (int(m.group(i)) for i in range(1, 5))
-            windows.append((sh * 60 + sm, eh * 60 + em))
+            start, end = sh * 60 + sm, eh * 60 + em
+            if end == 0:
+                end = 24 * 60
+            if end >= start:
+                # 开始 = 结束仍记成一个空区间（一分钟都不开）：要是丢掉，列表变空就成了「不限制」
+                windows.append((start, end))
+            else:
+                windows.extend([(start, 24 * 60), (0, end)])
     return windows
 
 

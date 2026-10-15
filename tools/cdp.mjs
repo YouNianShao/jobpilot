@@ -6,7 +6,7 @@
 //   node tools/cdp.mjs close <targetId>
 import { readFileSync } from 'node:fs';
 
-const PORT = process.env.CDP_PORT || '9222';
+const PORT = process.env.CDP_PORT || '9333';
 const BASE = `http://127.0.0.1:${PORT}`;
 
 async function browserWs() {

@@ -178,6 +178,20 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
   background: linear-gradient(180deg, var(--fill-1), transparent 60%);
 }
 .brand { display: flex; align-items: center; gap: 12px; padding: 0 6px; }
+/* 账号切换：两格分段按钮，当前账号是实心强调色 */
+.acct { padding: 0 6px; }
+.acct .nav-label { padding: 0 0 6px; }
+.acct-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 3px; border-radius: var(--r-md); background: var(--fill-2); }
+.acct-item {
+  padding: 6px 8px; border: 0; border-radius: calc(var(--r-md) - 3px); background: transparent; cursor: pointer;
+  font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text-2);
+}
+.acct-item:hover { color: var(--text); background: var(--fill-1); }
+.acct-item.is-active { background: var(--accent); color: var(--accent-ink); cursor: default; }
+.acct-item:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+.crumb-acct { margin-left: 10px; padding: 2px 8px; border-radius: 999px; font-size: var(--fs-xs); font-weight: var(--fw-medium);
+  background: var(--accent-soft, var(--fill-2)); color: var(--accent); vertical-align: middle; }
+.crumb-acct:empty { display: none; }
 .brand-mark {
   width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; flex: none;
   background: linear-gradient(140deg, var(--accent) 0%, var(--accent-2) 55%, var(--warm) 140%);
@@ -1034,3 +1048,63 @@ details.tech[open] > summary::before { content: '▾ '; }
 .toast-action { flex: none; margin: -4px 0; }
 /* 任务在跑时，任务按钮是灰的 */
 .btn.is-busy { cursor: progress; }
+
+/* ---------------- 全流程设置面板（右侧滑出，views/flow-sheet.js） ---------------- */
+.fs-backdrop { position: fixed; inset: 0; z-index: 70; background: var(--overlay); backdrop-filter: blur(3px);
+  opacity: 0; transition: opacity var(--t) var(--ease); }
+.fs-backdrop.is-open { opacity: 1; }
+.fs-sheet { position: fixed; top: 0; right: 0; z-index: 71; display: flex; flex-direction: column;
+  width: min(640px, 96vw); height: 100vh; background: var(--panel-solid); border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-4); transform: translateX(100%); transition: transform var(--t-slow, 280ms) var(--ease); }
+.fs-sheet.is-open { transform: none; }
+.fs-head { display: flex; align-items: flex-start; gap: 12px; padding: 18px 24px 14px; border-bottom: 1px solid var(--line-soft); }
+.fs-head h3 { font-size: var(--fs-lg); margin-bottom: 4px; }
+.fs-head .btn.icon { margin-left: auto; }
+.fs-body { flex: 1; overflow: auto; padding: 16px 24px 24px; display: grid; gap: 18px; align-content: start; }
+.fs-list { display: grid; border: 1px solid var(--line); border-radius: var(--r-lg, 14px); overflow: hidden; }
+.fs-row { padding: 12px 16px; background: var(--panel-solid); transition: background var(--t) var(--ease); }
+.fs-row + .fs-row { border-top: 1px solid var(--line-soft); }
+.fs-row.is-on { background: color-mix(in srgb, var(--accent) 5%, var(--panel-solid)); box-shadow: inset 3px 0 0 var(--accent); }
+.fs-row-head { display: flex; align-items: center; gap: 12px; }
+.fs-name { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.fs-sum { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fs-badges { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.fs-edit { display: grid; grid-template-columns: 72px 1fr; gap: 8px 12px; align-items: start; margin: 12px 0 2px 52px; }
+.fs-edit[hidden] { display: none; }
+.fs-lab { font-size: var(--fs-sm); color: var(--muted); padding-top: 5px; }
+.fs-chips { display: grid; gap: 4px; min-width: 0; }
+.fs-pages { display: flex; align-items: center; gap: 10px; }
+.fs-pages input { width: 76px; }
+.fs-switch { position: relative; flex: none; width: 40px; height: 22px; border-radius: 999px; border: 1px solid var(--line-strong);
+  background: var(--fill-2); cursor: pointer; transition: background var(--t) var(--ease), border-color var(--t) var(--ease); }
+.fs-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--muted); transition: transform var(--t) var(--ease-spring), background var(--t) var(--ease); }
+.fs-switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.fs-switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--accent-ink); }
+.fs-switch:disabled { opacity: .4; cursor: not-allowed; }
+.fs-switch:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.fs-plan h4 { font-size: var(--fs-md, 15px); margin-bottom: 8px; }
+.fs-steps { list-style: none; counter-reset: fs; display: grid; gap: 10px; margin: 0; padding: 0; }
+.fs-steps li { counter-increment: fs; display: grid; grid-template-columns: 26px 1fr; column-gap: 10px; font-size: var(--fs-sm); }
+.fs-steps li::before { content: counter(fs); grid-row: span 2; display: grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: var(--fw-bold); font-size: var(--fs-xs); }
+.fs-steps li span { color: var(--muted); }
+.fs-apply { display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; padding: 12px 14px;
+  border: 1px dashed var(--line-strong); border-radius: var(--r-md, 10px); font-size: var(--fs-sm); }
+.fs-apply b { display: block; margin-bottom: 2px; }
+.fs-foot { display: flex; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--line-soft); }
+.fs-foot .field-error[hidden] { display: none; }
+@media (max-width: 560px) { .fs-edit { grid-template-columns: 1fr; margin-left: 0; } .fs-badges { display: none; } }
+
+/* 配置页：时段下拉（从 08:00 到 22:00，可多段） */
+.win-list { display: grid; gap: 8px; }
+.win-row { display: flex; align-items: center; gap: 6px; }
+.win-row .select { width: 88px; min-width: 0; flex: none; padding-right: 22px; }
+.win-row .chip-x { margin-left: auto; }
+.win-tip { white-space: nowrap; }
+.win-tip.bad { color: var(--bad); }
+.win-empty[hidden] { display: none; }
+
+/* 配置页：月薪范围 [最低] K 到 [最高] K */
+.salary-row { display: flex; align-items: center; gap: 8px; }
+.salary-row input { width: 110px; }

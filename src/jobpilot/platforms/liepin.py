@@ -17,7 +17,7 @@ from urllib.parse import quote
 from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago, explain_missing
+from .base import DriverContext, _ago, explain_missing, stop_if_risky
 
 SEARCH_URL = "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}"
 JOB_URL = "https://www.liepin.com/job/{job_id}.shtml"
@@ -89,7 +89,8 @@ def make_job_id(raw: dict) -> str:
 class LiepinDriver:
     key = "liepin"
     name = "猎聘"
-    capabilities = frozenset({"collect"})
+    # 2026-10-14 第一次真机投递跑通（「我的投递」核实）后开放 apply
+    capabilities = frozenset({"collect", "apply"})
 
     def collect(self, ctx: DriverContext) -> CollectResult:
         cfg = ctx.config.platforms.get(self.key)
@@ -175,6 +176,18 @@ class LiepinDriver:
                         pass
         return result
 
+    @staticmethod
+    def _read_like_a_person(ctx: DriverContext, page) -> None:
+        """读到 JD 后往下滚一段、停几秒再走：秒开秒关、从不滚动的详情页访问是很明显的机器特征。
+        （参照 BossHunter 的猎聘详情页：滚 1200px。停留时间可被「停止」打断。）"""
+        import random
+
+        try:
+            page.eval(f"window.scrollBy(0, {random.randint(600, 1400)})")
+        except Exception:  # noqa: BLE001 - 滚不动不影响拿到的 JD
+            pass
+        ctx.stop.sleep(random.uniform(2.0, 4.5))
+
     def _fetch_jd(self, ctx: DriverContext, page, url: str) -> tuple[str, object]:
         """打开详情页读 JD；预算不足时抛 Denied（由调用方决定是否继续）。"""
         if not url:
@@ -186,14 +199,17 @@ class LiepinDriver:
         else:
             page.goto(url)
         if not page.wait_for(".job-intro-container", timeout_ms=18000):
+            stop_if_risky(page, "[liepin] 详情页")      # 是验证码 / 访问频繁就停手，不是才跳过这一个
             ctx.log(f"[liepin] 详情页没等到 JD 容器，已跳过：{url}")
             return "", page
         # 容器先出现、正文后渲染的情况很常见：轮询直到拿到非空文本，避免白花一次开页额度
         for _ in range(6):
             text = str(page.eval(JS_DETAIL) or "").strip()
             if text:
+                self._read_like_a_person(ctx, page)
                 return text, page
             ctx.stop.sleep(1.5)
+        stop_if_risky(page, "[liepin] 详情页")
         ctx.log(f"[liepin] 详情页 JD 容器为空，已跳过：{url}")
         return "", page
 
@@ -202,13 +218,39 @@ class LiepinDriver:
         return apply_probe.probe(ctx, job, platform=self.key, ready_selector=".job-intro-container, .job-apply-operate, body", label="猎聘")
 
     def apply(self, ctx: DriverContext, job: Job) -> ApplyResult:
-        """一键投递：岗位页上的「投简历聊一聊」（2026-10-13 预演核验）= 投出简历并开启会话。
+        """一键投递：点岗位页上的「投简历」(a.btn-minor)。
 
-        能力集里还没加 apply：第一次真实投递由你在旁边看着跑通之后才放开。
+        2026-10-14 第一次真机投递：以前把容器「投简历聊一聊」当按钮点，点在空白处什么都没发生
+        （「我的投递」里没有这条）。现在只点真正的按钮；看不出结果时去「我的投递」核对，不再点任何东西。
         """
+        # 点「投简历」会弹「选择附件简历」：用户选的是用猎聘默认选中的那份（2026-10-14）
         status, detail = apply_probe.click_apply(ctx, job, platform=self.key,
-                                                 ready_selector=".job-intro-container, .job-apply-operate, body", label="猎聘")
+                                                 ready_selector=".job-intro-container, .job-apply-operate, body", label="猎聘",
+                                                 confirm_default_resume=True)
+        if status == "failed" and self._in_my_applications(ctx, job):
+            return ApplyResult(status="applied", detail="点了「投简历」，已在「我的投递」里核实")
         return ApplyResult(status=status, detail=detail)
+
+    MY_APPLY_URL = "https://c.liepin.com/job/record/apply"
+
+    def _in_my_applications(self, ctx: DriverContext, job: Job) -> bool:
+        """打开「我的投递」，看这个岗位（标题 + 公司挨在一起）在不在。只读。"""
+        from .job51 import in_apply_list
+
+        ctx.reserve("apply")                      # 核对也是开页面：记在投递额度上、过同一道闸门
+        page = ctx.browser.open(self.MY_APPLY_URL)
+        try:
+            page.wait_for("body", timeout_ms=15000)
+            for _ in range(3):                    # 列表是异步加载的，等一会儿再读
+                ctx.stop.sleep(2)
+                if in_apply_list(page.text(), job.title, job.company):
+                    return True
+            return False
+        finally:
+            try:
+                page.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def monitor(self, ctx: DriverContext) -> MonitorResult:
         return MonitorResult()

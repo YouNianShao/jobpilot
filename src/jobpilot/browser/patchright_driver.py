@@ -14,6 +14,17 @@ from .driver import Page
 
 NAV_TIMEOUT_MS = 20000
 CLICK_TIMEOUT_MS = 8000
+# 连浏览器的超时：默认 3 分钟，浏览器状态异常时任务就干等 3 分钟才报错（2026-10-15 真踩过）
+CONNECT_TIMEOUT_MS = 20000
+
+# 驱动进程挂了 / 连接断了时 patchright 抛出的原文：碰到这些就重连一次再试
+_DEAD = ("Connection closed", "Target page, context or browser has been closed", "Browser has been closed",
+         "browser has disconnected", "Target closed")
+_PATCH_CHECKED = False
+
+
+def is_dead_connection(exc: BaseException) -> bool:
+    return any(word in str(exc) for word in _DEAD)
 
 
 class PatchrightPage:
@@ -88,12 +99,30 @@ class PatchrightBrowser:
         self._context = None
 
     def _ensure(self):
+        global _PATCH_CHECKED
         if self._context is not None:
             return self._context
         from patchright.sync_api import sync_playwright
 
+        if not _PATCH_CHECKED:
+            # 每个进程第一次连浏览器前检查一次驱动补丁（见 driver_patch.py：标签页刚开就关会把驱动杀掉）
+            from .driver_patch import ensure_patched
+
+            _PATCH_CHECKED = True
+            try:
+                ensure_patched()
+            except OSError:
+                pass
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.connect_over_cdp(self.cdp_url)
+        try:
+            self._browser = self._pw.chromium.connect_over_cdp(self.cdp_url, timeout=CONNECT_TIMEOUT_MS)
+        except Exception as exc:
+            self.close()
+            if "Timeout" in str(exc):
+                raise RuntimeError(
+                    f"连不上浏览器：{CONNECT_TIMEOUT_MS // 1000} 秒内没有响应。调试 Chrome 可能卡住了"
+                    "（比如有标签页一直在加载）：把它整个关掉，再点左下角「启动浏览器」") from exc
+            raise
         if not self._browser.contexts:
             raise RuntimeError(f"已连上 CDP 但没有浏览器上下文（请确认 Chrome 已登录）: {self.cdp_url}")
         self._context = self._browser.contexts[0]
@@ -117,7 +146,14 @@ class PatchrightBrowser:
             return False
 
     def open(self, url: str) -> Page:
-        page = self._ensure().new_page()
+        try:
+            page = self._ensure().new_page()
+        except Exception as exc:  # noqa: BLE001
+            if not is_dead_connection(exc):
+                raise
+            # 驱动进程挂了（浏览器还开着）：断开、重连一次。任务不必因为这一下就整个失败
+            self.close()
+            page = self._ensure().new_page()
         wrapped = PatchrightPage(page)
         wrapped.goto(url)
         return wrapped

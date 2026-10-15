@@ -15,14 +15,14 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import readable
 from ..ai.llm import build_llm
 from ..ai.providers import provider_options, resolve_provider
 from ..config import (
+    ACCOUNT_DIR,
     CONFIG_PATH,
-    DATA_DIR,
     AiCfg,
     AppConfig,
     config_problems,
@@ -59,6 +59,14 @@ class ResumeBody(BaseModel):
     text: str = ""
 
 
+class PlanItem(BaseModel):
+    """全流程里勾选的一个平台，和这一次用的搜索条件（不写回 config.yaml）。"""
+    platform: str
+    keywords: list[str] | None = None
+    cities: list[str] | None = None
+    max_pages: int | None = Field(default=None, ge=1, le=20)
+
+
 class TaskRequest(BaseModel):
     mode: str
     platform: str = "boss"
@@ -67,6 +75,9 @@ class TaskRequest(BaseModel):
     keywords: list[str] | None = None
     cities: list[str] | None = None
     max_pages: int | None = None
+    # 多平台全流程：勾选的平台按顺序依次采集；apply_after = 没有待确认时是否接着投递
+    plans: list[PlanItem] | None = None
+    apply_after: bool = True
 
 
 class JobIds(BaseModel):
@@ -155,8 +166,18 @@ def _field_message(err: dict) -> str:
     return str(err.get("msg") or "格式不对")
 
 
+def _account_brief() -> dict:
+    try:
+        from .. import accounts
+
+        return {"id": accounts.active_id(), "name": accounts.active_name()}
+    except Exception:  # noqa: BLE001 - 账号文件坏了也不能把看板带崩
+        return {"id": "A", "name": "账号 A"}
+
+
 def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner | None = None) -> FastAPI:
-    INLINE_RESUME = DATA_DIR / "resumes" / "master.md"
+    def inline_resume() -> Path:
+        return ACCOUNT_DIR / "resumes" / "master.md"   # 当前账号的简历位置
 
     app = FastAPI(title="JobPilot", version="2.0.0")
 
@@ -228,6 +249,7 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 "platforms": platforms,
                 "locks": locks,
                 "applied_today": ctx.policy.applied_today(),
+                "account": _account_brief(),
                 "daily_limit": ctx.config.apply.daily_limit,
                 # 一条 GROUP BY 拿全部状态（以前 4 次 COUNT），只回界面用到的 4 个键
                 "counts": {
@@ -238,6 +260,8 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 # 岗位池真实总数（所有状态）。以前概览「岗位池」用上面 4 个状态相加，
                 # 没算「未通过 / 被拒 / 已投过」：库里 31 个岗位，界面只写 4
                 "pool_total": sum(all_counts.values()),
+                # 每个平台有多少个已确认、待投递：「全部平台轮流投」的确认框里逐个平台写清楚
+                "approved_by_platform": ctx.repo.platform_counts(status=Status.APPROVED.value),
                 # 只回概览「待确认」卡片用到的字段：这个接口每 2 秒轮询一次，
                 # 以前把整个岗位（含 JD 正文）都塞进来，2 万岗位的库里一次就是 111KB
                 "pending_confirm": [{key: getattr(job, key) for key in PENDING_FIELDS} for job in pending],
@@ -266,7 +290,7 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 "chars": len(text),
                 "truncated": len(text) > limit,
                 "text": text[:limit],
-                "store_path": str(INLINE_RESUME),
+                "store_path": str(inline_resume()),
             }
 
         return with_ctx(build)
@@ -280,12 +304,12 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
         text = (body.text or "").replace("\r\n", "\n").strip()
         if len(text) < 50:
             return JSONResponse(status_code=400, content={"error": "简历太短了（至少 50 字），先把正文贴进来"})
-        INLINE_RESUME.parent.mkdir(parents=True, exist_ok=True)
-        INLINE_RESUME.write_text(text + "\n", encoding="utf-8")
+        inline_resume().parent.mkdir(parents=True, exist_ok=True)
+        inline_resume().write_text(text + "\n", encoding="utf-8")
         config = load_config()
-        config.profile.resume_path = str(INLINE_RESUME)
+        config.profile.resume_path = str(inline_resume())
         save_config(config, CONFIG_PATH)
-        return {"ok": True, "path": str(INLINE_RESUME), "chars": len(text)}
+        return {"ok": True, "path": str(inline_resume()), "chars": len(text)}
 
     @app.post("/api/resume/import")
     async def import_resume(request: Request, filename: str = ""):
@@ -659,9 +683,15 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
     @app.post("/api/tasks")
     def start_task(body: TaskRequest):
         try:
+            extra = {}
+            if body.mode == "full" and body.plans is not None:
+                keys = [plan.platform for plan in body.plans]
+                if len(set(keys)) != len(keys):
+                    return JSONResponse(status_code=400, content={"error": "同一个平台勾了两次"})
+                extra = {"plans": [plan.model_dump() for plan in body.plans], "apply_after": body.apply_after}
             task = tasks.start(
-                body.mode, body.platform, limit=body.limit,
-                keywords=body.keywords, cities=body.cities, max_pages=body.max_pages,
+                body.mode, "" if extra else body.platform, limit=body.limit,
+                keywords=body.keywords, cities=body.cities, max_pages=body.max_pages, **extra,
             )
         except TaskAlreadyRunning as exc:
             return JSONResponse(status_code=409, content={"error": str(exc)})
@@ -742,7 +772,55 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
         if problems:
             return JSONResponse(status_code=400, content={"error": f"有 {len(problems)} 项配置互相矛盾", "fields": problems})
         save_config(config, CONFIG_PATH)
-        return {"ok": True}
+        from .. import accounts
+
+        synced = accounts.sync_shared(config, accounts.active_id())
+        return {"ok": True, "synced": synced}
+
+    @app.get("/api/salary-preview")
+    def salary_preview(low: float = 0, high: float = 0):
+        """配置页「月薪范围」旁边的实时预览：按这个范围，岗位池里的岗位各有多少会被筛掉。
+
+        和评分前的预筛是同一套解析（prefilter.parse_salary），只读、不改任何东西。
+        """
+        from ..prefilter import parse_salary
+
+        def build(ctx: ServiceContext):
+            counts = {"total": 0, "inside": 0, "below": 0, "above": 0, "unknown": 0}
+            for (salary,) in ctx.repo.conn.execute("SELECT salary FROM jobs WHERE deleted_at IS NULL"):
+                counts["total"] += 1
+                lo, hi = parse_salary(salary or "")
+                if lo is None or hi is None:
+                    counts["unknown"] += 1
+                elif low > 0 and hi < low:
+                    counts["below"] += 1
+                elif high > 0 and lo > high:
+                    counts["above"] += 1
+                else:
+                    counts["inside"] += 1
+            return counts
+
+        return with_ctx(build)
+
+    @app.get("/api/accounts")
+    def list_accounts():
+        from .. import accounts
+
+        return {**accounts.listing(), "running": tasks.running}
+
+    @app.post("/api/accounts/switch")
+    def switch_account(body: dict[str, Any]):
+        """切换账号：一次只用一个。任务在跑时不许切 —— 切了它就会拿着 B 的配置去写 A 的库。"""
+        from .. import accounts
+
+        target = str((body or {}).get("id") or "")
+        if tasks.running:
+            return JSONResponse(status_code=409, content={"error": "有任务在运行，先停止或等它跑完再切换账号"})
+        try:
+            p = accounts.activate(target)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        return {"ok": True, "active": p.id, "name": accounts.active_name()}
 
     @app.get("/api/checks")
     def checks():
@@ -776,19 +854,60 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
             },
         )
 
+    @app.post("/api/browser/open")
+    def open_in_browser(body: dict[str, Any]):
+        """在调试 Chrome（有登录态的那个）里打开岗位链接并切到前台。
+
+        以前岗位池的链接用 <a target=_blank> 在你平时的浏览器里打开 —— 那边没登录招聘网站，
+        每次都要重新登录。这里走 CDP 的 HTTP 接口新开一个标签页：**不经过 patchright**，
+        不会被任务的驱动接管，也不会和正在跑的任务抢浏览器。
+        只放行四个招聘网站的地址：这个接口能让本机浏览器打开任意网址，不能变成开放跳转。
+        """
+        import json as _json
+        import urllib.parse
+        import urllib.request
+
+        from ..browser.launcher import debug_port, is_headless, port_open
+
+        url = str((body or {}).get("url") or "").strip()
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or "").lower()
+        allowed = ("zhipin.com", "51job.com", "liepin.com", "zhaopin.com")
+        if parts.scheme not in ("http", "https") or not any(host == d or host.endswith("." + d) for d in allowed):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "只能打开招聘网站的岗位链接"})
+        cfg = load_config()
+        h, port = debug_port(cfg.browser.cdp_url)
+        if not port_open(h, port) or is_headless(h, port):
+            return {"ok": False, "not_running": True,
+                    "error": "JobPilot 的浏览器没开：先点左下角「启动浏览器」，再点一次打开"}
+        base = f"http://{h}:{port}"
+        try:
+            req = urllib.request.Request(base + "/json/new?" + urllib.parse.quote(url, safe=":/?&=%#+@,;~"), method="PUT")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                target = _json.loads(resp.read().decode("utf-8", "replace"))
+            urllib.request.urlopen(base + "/json/activate/" + target["id"], timeout=5).close()
+        except (OSError, ValueError, KeyError) as exc:
+            return {"ok": False, "error": f"浏览器没能打开这个链接：{exc}"}
+        return {"ok": True}
+
     @app.post("/api/browser/launch")
     def launch_browser():
         """替用户开一个带调试端口的 Chrome（登录态存在 data/chrome-profile，下次还在）。"""
         from ..browser.launcher import launch
 
         cfg = load_config()
-        return launch(cfg.browser.cdp_url, DATA_DIR / "chrome-profile")
+        return launch(cfg.browser.cdp_url, ACCOUNT_DIR / "chrome-profile")
 
     @app.get("/api/health")
     def health():
         from ..browser import create_browser
+        from ..browser.launcher import debug_port, is_headless, occupied_message
 
         cfg = load_config()
+        host, port = debug_port(cfg.browser.cdp_url)
+        if is_headless(host, port):
+            # 连得上但没用：没有登录、用户也看不见。当成「没连上」，并说清楚原因
+            return {"cdp": cfg.browser.cdp_url, "ok": False, "occupied": True, "error": occupied_message(port)}
         browser = create_browser(cfg.browser.cdp_url)
         try:
             return {"cdp": cfg.browser.cdp_url, "ok": browser.health()}

@@ -8,7 +8,7 @@
    这个文件不 import app.js，避免循环依赖。 */
 
 import { get, post } from '../api.js';
-import { FILTERS, PLATFORM_NAME, STATUS_LABEL, isApplied, platformName } from '../common.js';
+import { FILTERS, PLATFORM_NAME, STATUS_LABEL, isApplied, openJobUrl, platformName } from '../common.js';
 import { clear, confirmDialog, el, empty, renderPager as sharedPager, skeletonRows, toast } from '../ui.js';
 
 const PAGE_SIZE = 50;
@@ -293,9 +293,10 @@ function jobRow(job) {
         onclick: (event) => { event.stopPropagation(); ctx.openAndCopy(job); },
       }));
     } else if (job.url) {
-      action.appendChild(el('a', {
-        class: 'btn ghost small', href: job.url, target: '_blank', rel: 'noopener',
-        onclick: (event) => event.stopPropagation(), text: '打开 ↗',
+      // 在调试浏览器里开（登录在那边），不再走普通浏览器的新标签页
+      action.appendChild(el('button', {
+        class: 'btn ghost small', type: 'button', text: '打开 ↗', title: '在 JobPilot 的浏览器（已登录）里打开',
+        onclick: (event) => { event.stopPropagation(); openJobUrl(job.url); },
       }));
     }
     if (!isApplied(job)) {

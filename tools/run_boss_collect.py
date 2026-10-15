@@ -2,7 +2,7 @@
 
 用法:
     .venv\\Scripts\\python.exe tools\run_boss_collect.py [cdpUrl] [keyword]
-默认 cdpUrl = http://127.0.0.1:9222（你已登录 BOSS 的那个调试 Chrome）
+默认 cdpUrl = http://127.0.0.1:9333（你已登录 BOSS 的那个调试 Chrome）
 结果写入临时数据库，不动正式数据。
 """
 
@@ -24,7 +24,7 @@ from jobpilot.safety.policy import Policy  # noqa: E402
 
 
 def main() -> int:
-    cdp = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:9222"
+    cdp = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:9333"
     keyword = sys.argv[2] if len(sys.argv) > 2 else "AI"
 
     cfg = AppConfig()

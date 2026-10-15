@@ -53,6 +53,11 @@
         <div class="brand-sub">求职领航</div>
       </div>
     </div>
+    <!-- 账号切换：两个求职账号分开投递，一次只用一个 -->
+    <div class="acct" aria-label="当前账号">
+      <div class="nav-label">账号</div>
+      <div class="acct-switch" id="accountSwitch" role="radiogroup" aria-label="切换账号"></div>
+    </div>
     <nav class="nav" id="nav">
       <div class="nav-label">工作台</div>
       <button class="nav-item is-active" data-view="overview"><svg><use href="#i-grid"/></svg>概览</button>
@@ -79,7 +84,7 @@
 
   <div class="main">
     <header class="topbar">
-      <div class="crumb" id="crumb">概览</div>
+      <div class="crumb"><span id="crumb">概览</span><span class="crumb-acct" id="crumbAccount"></span></div>
       <div class="grow"></div>
       <button class="btn ghost" id="btnChecks" title="系统体检：浏览器 / 简历 / AI Key / 数据库 / 平台配置"><svg><use href="#i-shield"/></svg>体检</button>
       <button class="btn ghost icon" id="btnRefresh" title="刷新 (r)" aria-label="刷新"><svg><use href="#i-refresh"/></svg></button>

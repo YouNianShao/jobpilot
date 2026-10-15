@@ -6,7 +6,7 @@ import { get, post } from '../../api.js';
 import { $, state } from '../../store.js';
 import { alertDialog, clear, confirmDialog, el, icon, toast } from '../../ui.js';
 import { GROUPS, configField, focusField, pick, put, readNatures, showFieldError, splitList, validateConfigForm } from './fields.js';
-import { cityPicker } from './city-picker.js';
+import { cityPicker, keywordChips } from './city-picker.js';
 import { resumeGroup } from './resume.js';
 
 let ctx = null;
@@ -122,7 +122,7 @@ function renderConfig() {
     const wideRow = el('div', { class: 'frow-wide' });
     for (const [path, label, type, wide] of fields) {
       const value = pick(cfg, path);
-      const shown = type === 'list' ? (value || []).join(',') : (value === undefined || value === null ? '' : value);
+      const shown = (type === 'list' || type === 'windows') ? (value || []).join(',') : (value === undefined || value === null ? '' : value);
       (wide ? wideRow : shortRow).appendChild(configField(path, label, type, shown, wide));
     }
     if (shortRow.children.length) body.appendChild(shortRow);
@@ -189,9 +189,10 @@ function renderConfig() {
       el('span', { class: 'label', text: '城市' }),
       cityPicker(plat.cities || [], state.cities, plat.name || key),
     ]));
-    const keywords = el('input', { id: 'cfg::platform.keywords', autocomplete: 'off' });
-    keywords.value = (plat.keywords || []).join(',');
-    wideRow.appendChild(el('label', { class: 'field wide' }, [el('span', { class: 'label', text: '关键词（逗号分隔）' }), keywords]));
+    wideRow.appendChild(el('div', { class: 'field wide' }, [
+      el('span', { class: 'label', text: '关键词' }),
+      keywordChips('cfg::platform.keywords', plat.keywords || []),
+    ]));
     body.appendChild(wideRow);
 
     // 关键词质量直接决定你看到什么岗位 —— 给一个"看简历推荐"的入口，并附上实际效果佐证
@@ -208,12 +209,12 @@ function renderConfig() {
         clear(kwBox);
         const add = (word) => {
           const input = $('cfg::platform.keywords');
-          const items = splitList(input.value);
-          if (!items.includes(word)) { items.push(word); input.value = items.join(','); }
+          if (splitList(input.value).includes(word)) { toast('「' + word + '」已经在关键词里了', 'ok'); return; }
+          input.dispatchEvent(new CustomEvent('chip-add', { detail: word }));
           toast('已加入关键词「' + word + '」（记得点保存配置）', 'ok');
         };
         if ((res.keywords || []).length) {
-          kwBox.appendChild(el('div', { class: 'muted small', text: '建议加入（点一下就填进上面的输入框）：' }));
+          kwBox.appendChild(el('div', { class: 'muted small', text: '建议加入（点「加入」就变成上面的一个标签）：' }));
           for (const row of res.keywords) {
             kwBox.appendChild(el('div', { class: 'kw-row' }, [
               el('span', { class: 'pill ok', text: row.text }),
@@ -329,9 +330,13 @@ async function saveConfig() {
       if (!input) continue;
       if (type === 'natures') {
         put(payload, path, readNatures(path));
+      } else if (type === 'salary') {
+        // 空 = 不限 = 0（后端的约定）；两个框一起存
+        put(payload, 'profile.salary_min', Number($('cfg::profile.salary_min').value) || 0);
+        put(payload, 'profile.salary_max', Number($('cfg::profile.salary_max').value) || 0);
       } else if (type === 'number') {
         put(payload, path, Number(input.value));
-      } else if (type === 'list') {
+      } else if (type === 'list' || type === 'windows') {
         put(payload, path, splitList(input.value));
       } else {
         if (path === 'ai.api_key' && String(input.value).includes('*')) continue;   // 掩码不回写

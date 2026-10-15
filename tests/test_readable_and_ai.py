@@ -258,6 +258,7 @@ def test_launcher_does_nothing_when_port_already_open(monkeypatch, tmp_path):
     from jobpilot.browser import launcher
 
     monkeypatch.setattr(launcher, "port_open", lambda host, port, timeout=0.6: True)
+    monkeypatch.setattr(launcher, "is_headless", lambda host, port: False)   # 别去问本机真实的 9222
     monkeypatch.setattr(launcher.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("不该再开一个")))
     assert launcher.launch("http://127.0.0.1:9222", tmp_path / "p") == {"ok": True, "already": True, "profile": str(tmp_path / "p")}
 

@@ -1,7 +1,7 @@
 """一次性 L1 全链路验证：真实 Chrome 采集 + 真实 AI 评分/招呼语 + 人工确认。
 
 用法:
-    python tools\run_boss_chain.py --cdp http://127.0.0.1:9222 --ai-config E:\\JobPilot\\config.yaml
+    python tools\run_boss_chain.py --cdp http://127.0.0.1:9333 --ai-config E:\\JobPilot\\config.yaml
 结果写临时库；--ai-config 只读取其中的 ai 段（api_key 不会被打印）。
 """
 
@@ -36,7 +36,7 @@ def _arg(name: str, default: str | None = None) -> str | None:
 
 
 def main() -> int:
-    cdp = _arg("--cdp", "http://127.0.0.1:9222") or ""
+    cdp = _arg("--cdp", "http://127.0.0.1:9333") or ""
     ai_config = _arg("--ai-config")
 
     cfg = load_config()

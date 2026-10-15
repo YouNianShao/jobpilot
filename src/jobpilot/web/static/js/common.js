@@ -1,5 +1,8 @@
 /* 多个视图共用的常量（岗位状态的中文名、筛选档位、投递状态）。 */
 
+import { post } from './api.js';
+import { toast } from './ui.js';
+
 export const STATUS_LABEL = {
   new: '待评分', filtered: '未通过', pending_confirm: '待确认', approved: '已确认',
   applied: '已投递', rejected: '被拒', already: '已投过', failed: '失败',
@@ -20,3 +23,20 @@ export const MODE_NAME = {
   monitor: '监测', followup: '跟进', full: '全流程',
 };
 export const modeName = (key) => MODE_NAME[key] || key || '';
+
+/* 岗位链接要在 JobPilot 的调试浏览器里开：用户的平台登录在那边，普通浏览器里是未登录状态。
+   okMessage 让调用方换成自己的成功提示（例如顺带说招呼语已复制），避免弹两条。 */
+export async function openJobUrl(url, okMessage) {
+  if (!url) { toast('这个岗位没有原链接', 'err'); return false; }
+  const res = await post('/api/browser/open', { url });
+  if (res && res.ok) {
+    toast(okMessage || '已在 JobPilot 的浏览器里打开（登录状态在那边）', 'ok');
+    return true;
+  }
+  if (res && res.not_running) {
+    toast(res.error || '调试浏览器没开：先点左下角「启动浏览器」', 'warn');
+  } else {
+    toast((res && res.error) || '打开失败', 'err');
+  }
+  return false;
+}

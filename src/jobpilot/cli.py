@@ -99,6 +99,10 @@ def _redirect_output(path: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 先切到「上次用的那个账号」：之后读的配置、开的数据库、浏览器端口都是它的
+    from . import accounts
+
+    accounts.activate()
     parser = argparse.ArgumentParser(prog="jobpilot", description="JobPilot 多平台求职助手")
     parser.add_argument("--version", action="version", version=f"jobpilot {__version__}")
     sub = parser.add_subparsers(dest="command")

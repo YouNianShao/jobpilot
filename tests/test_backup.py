@@ -26,7 +26,7 @@ def test_backup_contains_db_config_and_manifest(tmp_path, monkeypatch):
 
     monkeypatch.setattr(backup_mod, "DB_PATH", db)
     monkeypatch.setattr(backup_mod, "CONFIG_PATH", cfg)
-    monkeypatch.setattr(backup_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(backup_mod, "ACCOUNT_DIR", tmp_path)
 
     dest = tmp_path / "out.zip"
     info = backup_mod.build_backup(dest)
@@ -60,7 +60,7 @@ def test_backup_without_config_or_resumes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(backup_mod, "DB_PATH", db)
     monkeypatch.setattr(backup_mod, "CONFIG_PATH", tmp_path / "nope.yaml")
-    monkeypatch.setattr(backup_mod, "DATA_DIR", tmp_path / "no-data")
+    monkeypatch.setattr(backup_mod, "ACCOUNT_DIR", tmp_path / "no-data")
 
     dest = tmp_path / "out.zip"
     info = backup_mod.build_backup(dest)

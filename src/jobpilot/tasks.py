@@ -130,6 +130,8 @@ class Task:
     def snapshot(self) -> dict:
         return {
             "id": self.id, "mode": self.mode, "platform": self.platform,
+            # 多平台全流程：勾选了哪几个平台（界面在任务卡片上写出来）
+            "platforms": [plan["platform"] for plan in (self.options.get("plans") or [])],
             "status": self.status, "progress": dict(self.progress),
             "logs": self.logs[-80:], "result": self.result, "error": self.error,
             "started_at": self.started_at, "finished_at": self.finished_at,
@@ -160,7 +162,9 @@ class TaskRunner:
         """把任务快照写进 task_runs（失败不影响任务本身）。"""
         try:
             ctx.repo.upsert_task_run({
-                "id": task.id, "mode": task.mode, "platform": task.platform,
+                # 多平台全流程记成 "boss,liepin"：记录页据此写「BOSS直聘、猎聘」
+                "id": task.id, "mode": task.mode,
+                "platform": task.platform or ",".join(p["platform"] for p in (task.options.get("plans") or [])),
                 "status": task.status,
                 "progress": json.dumps(task.progress, ensure_ascii=False),
                 "logs": json.dumps(task.logs[-60:], ensure_ascii=False),
@@ -178,7 +182,8 @@ class TaskRunner:
             ctx = self._ctx_factory()
             # 开跑之前先问一句"这个模式现在真的能做事吗"：
             # 不能就直接拒绝，而不是跑完一圈再告诉用户什么都没发生。
-            problem = check_mode(ctx.config, mode, platform or None, registry=build_default_registry())
+            problem = check_mode(ctx.config, mode, platform or None, registry=build_default_registry(),
+                                 plans=options.get("plans"))
             if problem:
                 try:
                     ctx.repo.conn.close()

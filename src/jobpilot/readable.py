@@ -36,8 +36,12 @@ def clean(text: object) -> str:
     if not out:
         return ""
     # 浏览器没开：patchright 的原文是一长串英文调用日志，用户只需要知道「去开浏览器」
+    if out.startswith("连不上浏览器"):
+        return out
     if "connect_over_cdp" in out or "ECONNREFUSED" in out:
         return "连不上浏览器：带调试端口的 Chrome 没有开着。点左下角「启动浏览器」，登录招聘网站后再试"
+    if "Connection closed while reading from the driver" in out or "Target page, context or browser has been closed" in out:
+        return "和浏览器的连接中途断了（多半是任务进行中有标签页被关掉）。已经做完的部分都保存了，重新点一次就能接着跑"
     out = _PLATFORM_TAG.sub(lambda m: platform_name(m.group(1)) + "：", out)
     for path, hint in _CONFIG_HINTS.items():
         out = out.replace(f"（{path}）", f"（{hint}）").replace(path, hint)
@@ -122,13 +126,33 @@ def run_summary(mode: str, result: object, error: str = "") -> str:
             if problem:
                 parts.append(f"{_STEP_NAMES.get(key, key)}：{problem}")
                 break                                # 前一步没做成，后面的步骤也就没东西了
-            if counts:
+            per = sub.get("per_platform")
+            if isinstance(per, dict) and per:        # 多平台：每个平台各说一句（失败的平台也写出来）
+                lines = []
+                for plat, one in per.items():
+                    if not isinstance(one, dict):
+                        continue
+                    lines.append(platform_name(plat) + " " + (_problem(one) or "，".join(_counts(one)) or "没有新岗位"))
+                parts.append(f"{_STEP_NAMES.get(key, key)}：" + "；".join(lines))
+            elif counts:
                 parts.append(f"{_STEP_NAMES.get(key, key)}：" + "，".join(counts))
         if result.get("awaiting_confirmation"):
             parts.append(f"{result['awaiting_confirmation']} 个等你确认")
         if not parts and result.get("stopped") is not None:
             return "任务被停止"
         return "；".join(parts) or "没有可处理的岗位"
+    per = result.get("per_platform")
+    if isinstance(per, dict) and per:                # 所有平台轮流投：逐个平台说投了几个
+        parts = []
+        for key, sub in per.items():
+            counts = _counts(sub) if isinstance(sub, dict) else []
+            line = platform_name(key) + "：" + ("，".join(counts) or "没投出")
+            if isinstance(sub, dict) and sub.get("stopped"):
+                line += "（" + clean(sub["stopped"]) + "）"
+            parts.append(line)
+        if isinstance(result.get("note"), str) and result["note"]:
+            parts.append(clean(result["note"]))
+        return "；".join(parts)
     problem = _problem(result)
     counts = _counts(result)
     if problem and counts:

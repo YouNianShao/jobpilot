@@ -13,7 +13,7 @@ from urllib.parse import quote
 from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago, explain_missing
+from .base import DriverContext, _ago, explain_missing, stop_if_risky
 
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={city}&keyword={kw}&searchType=2&keywordType=&page={page}"
 # 2026-10-10 实机验证：列表里的公司链接路径段是 /all/，岗位详情同一段可用
@@ -109,7 +109,8 @@ def make_job_id(raw: dict) -> str:
 class Job51Driver:
     key = "51job"
     name = "前程无忧"
-    capabilities = frozenset({"collect"})
+    # 2026-10-14 两次真机投递都跑通（第二次自动在「我的申请」核实成功）后开放 apply
+    capabilities = frozenset({"collect", "apply"})
 
     # 界面用这两个属性判断「城市是否受限」：受限的平台填了表外的城市会被跳过
     supported_cities = CITY_CODES
@@ -219,6 +220,7 @@ class Job51Driver:
         else:
             page.goto(url)
         if not page.wait_for(".bmsg", timeout_ms=18000):
+            stop_if_risky(page, "[51job] 详情页")       # 是验证码 / 访问频繁就停手，不是才跳过这一个
             ctx.log(f"[51job] 详情页没等到 JD 容器，已跳过：{url}")
             return "", page
         # 容器先出现、正文后渲染的情况很常见：轮询直到拿到非空文本，避免白花一次开页额度
@@ -227,6 +229,7 @@ class Job51Driver:
             if text:
                 return text, page
             ctx.stop.sleep(1.5)
+        stop_if_risky(page, "[51job] 详情页")
         ctx.log(f"[51job] 详情页 JD 容器为空，已跳过：{url}")
         return "", page
 
@@ -237,7 +240,6 @@ class Job51Driver:
     def apply(self, ctx: DriverContext, job: Job) -> ApplyResult:
         """一键投递：岗位页上的「立即投递」（2026-10-13 预演核验：两个按钮，文字都是「立即投递」）。
 
-        能力集里还没加 apply：第一次真实投递由你在旁边看着跑通之后才放开，在那之前任务层会先拒绝。
         """
         status, detail = apply_probe.click_apply(ctx, job, platform=self.key,
                                                  ready_selector=".bmsg, .tHeader, body", label="前程无忧")

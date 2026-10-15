@@ -23,7 +23,7 @@ from jobpilot.safety.policy import Policy  # noqa: E402
 
 
 def main() -> int:
-    cdp = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:9222"
+    cdp = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:9333"
 
     cfg = AppConfig()
     cfg.platforms["boss"].enabled = True

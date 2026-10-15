@@ -1,7 +1,7 @@
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const out = { steps: [], before: location.href, tabsBefore: 0 };
-  try { out.tabsBefore = (await (await fetch('http://127.0.0.1:9222/json/list')).json()).filter((t) => t.type === 'page').length; } catch (e) {}
+  try { out.tabsBefore = (await (await fetch('http://127.0.0.1:9333/json/list')).json()).filter((t) => t.type === 'page').length; } catch (e) {}
 
   const btn = document.querySelector('.btn-startchat') || document.querySelector('[class*="startchat"]');
   if (!btn) return JSON.stringify({ error: 'no-startchat-button', html: (document.body.innerText || '').slice(0, 200) }, null, 1);

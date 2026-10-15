@@ -1,4 +1,4 @@
-const r = await fetch("http://127.0.0.1:9222/json/version");
+const r = await fetch("http://127.0.0.1:9333/json/version");
 const info = await r.json();
 const ws = new WebSocket(info.webSocketDebuggerUrl);
 await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });

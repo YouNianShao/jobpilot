@@ -10,7 +10,7 @@ from jobpilot.browser import create_browser  # noqa: E402
 from jobpilot.platforms.job51 import JOB_URL, JS_DETAIL  # noqa: E402
 
 print("JS_DETAIL 前 80 字:", repr(JS_DETAIL[:80]))
-browser = create_browser("http://127.0.0.1:9222")
+browser = create_browser("http://127.0.0.1:9333")
 page = browser.open(JOB_URL.format(job_id="173851192"))
 print("wait_for(.bmsg):", page.wait_for(".bmsg", timeout_ms=15000))
 result = page.eval(JS_DETAIL)

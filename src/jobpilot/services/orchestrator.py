@@ -25,14 +25,29 @@ class TaskNotRunnable(RuntimeError):
     """这个模式在当前配置/驱动下做不了任何事。"""
 
 
-def check_mode(config, mode: str, platform: str | None, *, registry=None) -> str | None:
+def check_mode(config, mode: str, platform: str | None, *, registry=None, plans=None) -> str | None:
     """返回"为什么跑不了"的人话原因；能跑就返回 None。"""
     if mode not in MODES:
         return f"未知模式：{mode}"
+    if mode == "full" and plans is not None:
+        # 多平台全流程：每个勾选的平台都要能采集（不能投递的平台只采集，在投递那步说明）
+        if not plans:
+            return "没有勾选任何平台"
+        registry = registry or build_default_registry()
+        for plan in plans:
+            problem = check_mode(config, "collect", plan.get("platform"), registry=registry)
+            if problem:
+                return problem
+        return None
     if mode in ("confirm", "followup"):
         return None            # 纯数据库 / 纯文本，不开页面
     if mode in ("score", "greet") and not platform:
         return None            # 不开页面：不指定平台 = 所有平台的岗位一起处理
+    if mode == "apply" and not platform:
+        # 不指定平台 = 所有能投的平台轮流投；一个能投的都没有才拒绝
+        registry = registry or build_default_registry()
+        reasons = [check_mode(config, "apply", key, registry=registry) for key in registry.keys()]
+        return None if any(r is None for r in reasons) else "没有可以自动投递的平台（都没开放，或设置里关掉了「允许对该平台投递」）"
     if not platform:
         return f"{mode} 需要指定平台"
 
@@ -72,6 +87,20 @@ def run(ctx: ServiceContext, mode: str, platform: str | None = None, *, registry
         return scorer.score_jobs(ctx, None, limit=options.get("limit") or 100)
     if mode == "greet" and not platform:
         return greeter.greet_jobs(ctx, None, limit=options.get("limit") or 100)
+    if mode == "apply" and not platform:
+        # 所有平台轮流投：一个平台等间隔时去投下一个平台（每个平台自己的间隔不变）
+        problem = check_mode(ctx.config, "apply", None, registry=registry)
+        if problem:
+            return {"error": problem, "mode": mode, "platform": "all"}
+        return applier.apply_all(ctx, registry=registry, limit=options.get("limit"))
+
+    if mode == "full" and options.get("plans") is not None:
+        # 多平台全流程：勾选的平台依次采集（每个平台这一次的搜索条件在 plans 里）
+        problem = check_mode(ctx.config, mode, None, registry=registry, plans=options["plans"])
+        if problem:
+            return {"error": problem, "mode": mode, "platform": "multi"}
+        return run_full_multi(ctx, options["plans"], registry=registry, limit=options.get("limit"),
+                              apply_after=options.get("apply_after", True))
 
     if platform is None:
         return {"error": f"{mode} 需要指定平台"}
@@ -111,4 +140,41 @@ def run(ctx: ServiceContext, mode: str, platform: str | None = None, *, registry
         return summary
 
     summary["steps"]["apply"] = applier.apply_jobs(ctx, platform, registry=registry, limit=options.get("limit"))
+    return summary
+
+
+def run_full_multi(ctx: ServiceContext, plans: list[dict], *, registry=None, limit: int | None = None,
+                   apply_after: bool = True) -> dict:
+    """勾选的几个平台依次采集 → 所有平台的新岗位评分、写招呼语 → 有待确认就停下；
+    没有待确认、且勾了「跑完后投递」时，**只在勾选的平台里**轮流投递已确认的岗位。
+
+    平台之间是**依次**采集，不并发：并发开页面会把同一个账号的节奏瞬间拉满。
+    某个平台采集失败（没登录 / 被风控锁）不影响后面的平台。
+    """
+    registry = registry or build_default_registry()
+    chosen = [plan["platform"] for plan in plans]
+    summary: dict = {"platform": "multi", "platforms": chosen, "steps": {}}
+    per: dict[str, dict] = {}
+    for plan in plans:
+        ctx.stop.check()
+        key = plan["platform"]
+        ctx.log(f"[full] 采集 {registry.get(key).name}")
+        per[key] = collector.collect(ctx, key, registry=registry, keywords=plan.get("keywords"),
+                                     cities=plan.get("cities"), max_pages=plan.get("max_pages"))
+    collected: dict = {"per_platform": per}
+    for field in ("new", "duplicate", "filtered"):
+        collected[field] = sum(int(r.get(field) or 0) for r in per.values() if isinstance(r, dict))
+    if per and all(isinstance(r, dict) and r.get("error") for r in per.values()):
+        collected["error"] = "；".join(f"{registry.get(k).name}：{r['error']}" for k, r in per.items())
+    summary["steps"]["collect"] = collected
+    summary["steps"]["score"] = scorer.score_jobs(ctx, None, limit=limit or 100)
+    summary["steps"]["greet"] = greeter.greet_jobs(ctx, None, limit=limit or 100)
+
+    pending = confirmer.pending_count(ctx, None)
+    if ctx.config.confirm.required and pending:
+        summary["awaiting_confirmation"] = pending
+        summary["note"] = f"{pending} 个岗位待人工确认；确认后再投递"
+        return summary
+    if apply_after:
+        summary["steps"]["apply"] = applier.apply_all(ctx, registry=registry, limit=limit, platforms=chosen)
     return summary

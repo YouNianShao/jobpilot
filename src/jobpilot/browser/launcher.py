@@ -27,8 +27,8 @@ CANDIDATES = (
 
 
 def debug_port(cdp_url: str) -> tuple[str, int]:
-    parts = urlsplit(cdp_url or "http://127.0.0.1:9222")
-    return parts.hostname or "127.0.0.1", parts.port or 9222
+    parts = urlsplit(cdp_url or "http://127.0.0.1:9333")
+    return parts.hostname or "127.0.0.1", parts.port or 9333
 
 
 def port_open(host: str, port: int, timeout: float = 0.6) -> bool:
@@ -37,6 +37,29 @@ def port_open(host: str, port: int, timeout: float = 0.6) -> bool:
             return True
     except OSError:
         return False
+
+
+def is_headless(host: str, port: int, timeout: float = 1.5) -> bool:
+    """端口上是不是一个**无头** Chrome（看不见窗口、也没有用户的登录态）。
+
+    真实故障：别的自动化脚本（DrissionPage 之类）用临时目录在 9222 起了个无头 Chrome，
+    JobPilot 以为「已经开着」什么都不做，点「启动浏览器」就像没反应。
+    """
+    import json
+    from urllib.request import urlopen
+
+    try:
+        with urlopen(f"http://{host}:{port}/json/version", timeout=timeout) as resp:
+            info = json.loads(resp.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return False
+    return "headless" in str(info.get("User-Agent", "")).lower()
+
+
+def occupied_message(port: int) -> str:
+    return (f"调试端口 {port} 被别的程序占着：上面是一个看不见窗口的无头 Chrome（没有你的登录），"
+            "通常是另一个自动化工具（比如 BossHunter 的 Start.py）开的。"
+            "请先关掉那个程序（或在任务管理器里结束它的 Chrome），再点「启动浏览器」。")
 
 
 def find_chrome() -> str | None:
@@ -54,6 +77,8 @@ def launch(cdp_url: str, profile_dir: Path, *, start_url: str = "https://www.zhi
     if host not in ("127.0.0.1", "localhost"):
         return {"ok": False, "error": f"配置里的浏览器地址是 {host}，不是本机，没法替你打开"}
     if port_open(host, port):
+        if is_headless(host, port):
+            return {"ok": False, "occupied": True, "error": occupied_message(port)}
         return {"ok": True, "already": True, "profile": str(profile_dir)}
     chrome = find_chrome()
     if not chrome:

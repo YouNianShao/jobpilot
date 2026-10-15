@@ -3,7 +3,8 @@ import {
   alertDialog, clear, confirmDialog, el, empty, fmtTime, icon, meter, progress, remainTone, renderPager,
   skeleton, toast, withLoading,
 } from './ui.js';
-import { STATUS_LABEL, isApplied, modeName, platformName } from './common.js';
+import { STATUS_LABEL, isApplied, modeName, openJobUrl, platformName } from './common.js';
+import { askPermissionOnce, watchTask } from './notify.js';
 import { $, state } from './store.js';
 import { binAction, initJobs, isBin, loadJobs, refreshJobsQuietly, setStatusFilter, toggleBin } from './views/jobs.js';
 
@@ -84,7 +85,8 @@ function renderPipeline(status) {
     {
       n: 4, label: '今日投递', value: applied, unit: '/ ' + limit, filter: 'approved', pct: usedPct,
       sub: approved ? (approved + ' 个已确认，等着投递') : (applied >= limit ? '已到今天的上限' : '还能投 ' + (limit - applied) + ' 个'),
-      action: approved ? ['投递', () => runTask('apply')] : null, now: !!approved && !pending && !fresh,
+      // 概览上的「投递」= 所有能投的平台轮流投（顶栏的「投递」仍只投顶栏选的那个平台）
+      action: approved ? ['投递', () => runTask('apply', { all: true })] : null, now: !!approved && !pending && !fresh,
     },
   ];
   for (const step of steps) {
@@ -295,7 +297,13 @@ function pendingItem(job) {
     }));
   }
   more.appendChild(el('button', { class: 'link', type: 'button', text: '详情', onclick: () => openJob(job.id) }));
-  if (job.url) more.appendChild(el('a', { class: 'link', href: job.url, target: '_blank', rel: 'noopener', text: '原网页 ↗' }));
+  // 在调试浏览器里开（登录在那边），不再走普通浏览器的新标签页
+  if (job.url) {
+    more.appendChild(el('button', {
+      class: 'link', type: 'button', text: '原网页 ↗', title: '在 JobPilot 的浏览器（已登录）里打开',
+      onclick: () => openJobUrl(job.url),
+    }));
+  }
   const side = el('div', { class: 'pi-side' }, [
     el('div', { class: 'pi-ops' }, [
       el('button', { class: 'btn primary small', type: 'button', text: '确认投递', onclick: () => decide('confirm', [job.id]) }),
@@ -346,7 +354,7 @@ function renderTask(status) {
   pill.className = 'pill ' + (running ? 'live' : (ok ? 'ok' : (bad ? 'bad' : 'warn')));
   pill.textContent = running ? (status.paused ? '已暂停' : '运行中')
     : ({ completed: ok ? '已完成' : '没有做成', failed: '出错', stopped: '已停止' }[task.status] || task.status);
-  meta.textContent = [platformName(task.platform), modeName(task.mode)].filter(Boolean).join(' · ');
+  meta.textContent = [taskPlatform(task), modeName(task.mode)].filter(Boolean).join(' · ');
 
   const p = task.progress || {};
   if (running && p.total) prog.appendChild(progress(p.current || 0, p.total, p.label || ''));
@@ -454,18 +462,25 @@ function renderMonitor() {
    跟进队列、统计都会跟真实情况对不上。 */
 
 async function openAndCopy(job) {
-  // 顺序很重要：window.open 必须在用户点击的手势里同步调用，否则会被当成弹窗拦掉
-  if (job.url) window.open(job.url, '_blank', 'noopener');
-  if (!job.greeting) {
-    toast(job.url ? '已打开岗位（这个岗位还没有招呼语）' : '这个岗位没有原链接', job.url ? 'ok' : 'err');
+  // 先复制：剪贴板写入要在点击手势里尽早发起，等完打开请求再写可能被浏览器拒绝
+  let copied = null;   // null = 没有招呼语，true/false = 复制成败
+  if (job.greeting) {
+    try { await navigator.clipboard.writeText(job.greeting); copied = true; } catch (e) { copied = false; }
+  }
+  if (!job.url) {
+    // 没链接只能复制；复制结果就是唯一的提示
+    if (copied === true) toast('招呼语已复制（这个岗位没有原链接）', 'ok');
+    else if (copied === false) toast('复制失败（浏览器拒绝了剪贴板写入）', 'err');
+    else toast('这个岗位没有原链接', 'err');
     return;
   }
-  try {
-    await navigator.clipboard.writeText(job.greeting);
-    toast('已打开岗位，招呼语已复制', 'ok');
-  } catch (e) {
-    toast('已打开岗位，但复制失败（浏览器拒绝了剪贴板写入）', 'err');
-  }
+  // 链接在 JobPilot 的调试浏览器里开（登录在那边）；成功提示合并复制结果，只弹一条
+  const okMessage = copied === true ? '已打开岗位，招呼语已复制，粘贴即可'
+    : copied === false ? '已打开岗位，但复制失败（浏览器拒绝了剪贴板写入）'
+    : '已打开岗位（这个岗位还没有招呼语）';
+  const opened = await openJobUrl(job.url, okMessage);
+  // 打开失败时 openJobUrl 已经提示了原因；复制成功的话补一句，免得用户以为也没复制
+  if (!opened && copied === true) toast('招呼语已复制', 'ok');
 }
 
 async function markApplied(job) {
@@ -674,7 +689,7 @@ function renderActivity(data) {
     const tr = el('tr', {});
     tr.appendChild(el('td', { class: 'muted', text: fmtTime(run.created_at) }));
     tr.appendChild(el('td', { text: modeName(run.mode) }));
-    tr.appendChild(el('td', {}, [el('span', { class: 'pill', text: platformName(run.platform) || '—' })]));
+    tr.appendChild(el('td', {}, [el('span', { class: 'pill', text: taskPlatform(run) || '—' })]));
     tr.appendChild(el('td', {}, [el('span', { class: 'pill ' + tone, text: run.status === 'completed' ? (notDone ? '没做成' : '完成') : (run.status === 'failed' ? '失败' : '已停止') })]));
     tr.appendChild(el('td', { class: 'muted num', text: dur === null ? '—' : fmtDur(dur) }));
     // 结果 / 原因：后端已经翻成人话（run.summary）；一律左对齐，长了截断、悬停看全文
@@ -1044,7 +1059,8 @@ const TASK_TITLE = {
 };
 const NEEDS_PLATFORM = new Set(['collect', 'apply', 'full']);
 
-function taskSummary(mode) {
+function taskSummary(mode, all) {
+  if (mode === 'apply' && all) return '所有平台轮流';
   const name = platformName(state.platform);
   const cfg = (state.config && state.config.platforms && state.config.platforms[state.platform]) || {};
   const where = (cfg.keywords || []).join('、') + ' · ' + (cfg.cities || []).join('、') + ' · 每组 ' + (cfg.max_pages || 3) + ' 页';
@@ -1054,8 +1070,65 @@ function taskSummary(mode) {
   return '所有平台';
 }
 
-async function runTask(mode) {
-  if (NEEDS_PLATFORM.has(mode) && !state.platform) { toast('先在顶栏选一个平台', 'warn'); return; }
+/* 任务的平台一栏：没指定平台的投递 = 所有平台轮流投 */
+function taskPlatform(task) {
+  const many = (task.platforms && task.platforms.length) ? task.platforms
+    : (String(task.platform || '').includes(',') ? task.platform.split(',') : null);
+  if (many) return many.map(platformName).join('、');             // 多平台全流程：写出勾选的那几个
+  if (!task.platform && task.mode === 'apply') return '所有平台';
+  return platformName(task.platform);
+}
+
+/* 能自动投递的平台：驱动已实机核验 + 设置里允许投递 */
+function applyPlatforms() {
+  const status = state.status || {};
+  return Object.entries(status.platforms || {}).filter(([key, info]) => {
+    const cfg = (state.config && state.config.platforms && state.config.platforms[key]) || {};
+    return (info.capabilities || []).includes('apply') && cfg.apply !== false;
+  });
+}
+
+/* 「所有平台轮流投」确认框里逐个平台写清楚：几个已确认、今天还能投几个；不能投的也说出来 */
+function applyAllText() {
+  const byPlat = (state.status || {}).approved_by_platform || {};
+  const usable = applyPlatforms();
+  const lines = usable.filter(([key]) => byPlat[key]).map(([key, info]) =>
+    '· ' + (info.name || key) + '：已确认 ' + byPlat[key] + ' 个，今天还能投 ' + ((info.remaining || {}).daily_limit ?? '-') + ' 个');
+  if (!lines.length) return [];
+  const off = Object.keys(byPlat).filter((key) => byPlat[key] && !usable.some(([k]) => k === key));
+  if (off.length) lines.push('· ' + off.map(platformName).join('、') + '：没开放自动投递，这次不投');
+  return lines;
+}
+
+/* 「运行全流程」先打开设置面板：选这一轮跑哪些平台、这一次搜什么（views/flow-sheet.js） */
+async function openFullFlow() {
+  if (state.browserOk === false) {
+    const go = await confirmDialog('浏览器还没打开',
+      '全流程要先采集，需要一个带调试端口、已经登录招聘网站的 Chrome，现在它没有开着。\n现在替你打开吗？打开后先登录，再回来点「运行全流程」。',
+      { okText: '启动浏览器', kind: 'warn' });
+    if (go) launchBrowser();
+    return;
+  }
+  if (!state.config) state.config = await get('/api/config');
+  let mod;
+  try {
+    mod = await import('./views/flow-sheet.js');
+  } catch (exc) {
+    await alertDialog('全流程面板打不开', '页面脚本加载失败：' + exc.message + '。刷新页面再试。', 'bad');
+    return;
+  }
+  const started = await mod.openFlowSheet({
+    status: state.status, config: state.config, preselect: state.platform ? [state.platform] : [],
+    start: (body) => post('/api/tasks', body),
+  });
+  if (started) { toast('全流程已开始', 'ok'); await refresh(); }
+}
+
+async function runTask(mode, opts) {
+  askPermissionOnce();          // 系统通知只能在点击里请求授权：第一次点任务按钮时顺手问一次
+  if (mode === 'full') return openFullFlow();
+  const all = mode === 'apply' && !!(opts && opts.all);
+  if (NEEDS_PLATFORM.has(mode) && !all && !state.platform) { toast('先在顶栏选一个平台', 'warn'); return; }
   // 采集 / 投递要开平台页面：浏览器没连上就先说清楚，不要等任务跑起来再报一串英文
   if (NEEDS_PLATFORM.has(mode) && state.browserOk === false) {
     const go = await confirmDialog('浏览器还没打开',
@@ -1064,18 +1137,27 @@ async function runTask(mode) {
     if (go) launchBrowser();
     return;
   }
-  if (mode === 'apply') {
-    const approved = (state.status && state.status.counts && state.status.counts.approved) || 0;
+  if (all) {
+    const lines = applyAllText();
+    if (!lines.length) { await alertDialog('没有可以投的岗位', '已确认的岗位所在的平台都还没开放自动投递。', 'warn'); return; }
+    const ok = await confirmDialog('所有平台轮流投递',
+      '一个平台在等投递间隔时，先去下一个平台投；每个平台自己的间隔、额度和风控一点不少。发出后撤不回。\n'
+      + lines.join('\n') + '\n某个平台掉登录或被风控拦下，只停那一个，其它平台继续。',
+      { okText: '开始投递' });
+    if (!ok) return;
+  } else if (mode === 'apply') {
+    const approved = ((state.status || {}).approved_by_platform || {})[state.platform] || 0;
     const left = (((state.status || {}).platforms || {})[state.platform] || {}).remaining || {};
     const ok = await confirmDialog('投递已确认的岗位',
-      '将在' + platformName(state.platform) + '对已确认的岗位逐个发起沟通并发送招呼语，发出后撤不回。\n'
-      + '已确认 ' + approved + ' 个 · 今日还能投 ' + (left.daily_limit ?? '-') + ' 个',
+      '将在' + platformName(state.platform) + '对已确认的岗位逐个投递，发出后撤不回。\n'
+      + platformName(state.platform) + '已确认 ' + approved + ' 个 · 今日还能投 ' + (left.daily_limit ?? '-') + ' 个\n'
+      + '想几个平台一起投：用概览「今日投递」卡片上的「投递」。',
       { okText: '开始投递' });
     if (!ok) return;
   }
-  const res = await post('/api/tasks', { mode, platform: NEEDS_PLATFORM.has(mode) ? state.platform : '' });
+  const res = await post('/api/tasks', { mode, platform: (NEEDS_PLATFORM.has(mode) && !all) ? state.platform : '' });
   if (res.error) { await alertDialog((TASK_TITLE[mode] || mode) + '没有开始', res.error, 'warn'); return; }
-  toast('已开始' + (TASK_TITLE[mode] || mode) + '（' + taskSummary(mode) + '）', 'ok');
+  toast('已开始' + (TASK_TITLE[mode] || mode) + '（' + taskSummary(mode, all) + '）', 'ok');
   await refresh();
 }
 
@@ -1099,6 +1181,8 @@ async function refresh() {
   const status = await get('/api/status');
   if (status.error) return;
   state.status = status;
+  // 任务刚结束的那一下：系统通知 + 响一声 + 标签标题（见 notify.js）
+  watchTask(status.task, (task) => [taskPlatform(task), modeName(task.mode)].filter(Boolean).join(' · ') + ' ');
 
   if (!state.config) state.config = await get('/api/config');   // 风控条需要"上限"做分母
 
@@ -1127,6 +1211,8 @@ async function refresh() {
     : '当前平台还没有开放自动投递：驱动能力未实机核验，或设置里关掉了「允许对该平台投递」';
 
   renderTask(status);
+  // 每一页标题旁都写着当前是哪个账号：投递是不可撤回的，身份不能靠记忆
+  if (status.account) $('crumbAccount').textContent = status.account.name;
   if (state.view === 'overview') {
     renderPipeline(status);
     renderRisk(status);
@@ -1148,7 +1234,8 @@ async function checkBrowser() {
   const health = await get('/api/health');
   state.browserOk = !!health.ok;
   $('browserState').className = 'browser-state ' + (health.ok ? 'ok' : 'err');
-  $('browserText').textContent = health.ok ? '浏览器已连接' : '浏览器未连接';
+  $('browserText').textContent = health.ok ? '浏览器已连接' : (health.occupied ? '端口被别的程序占用' : '浏览器未连接');
+  $('browserState').title = health.occupied ? health.error : '';
   $('btnLaunchBrowser').hidden = !!health.ok;
 }
 
@@ -1159,7 +1246,10 @@ async function launchBrowser() {
     const res = await post('/api/browser/launch');
     if (!res.ok) { await alertDialog('浏览器没能打开', res.error || '未知原因', 'warn'); return; }
     await checkBrowser();
-    if (!res.already) {
+    if (res.already) {
+      // 以前这里什么都不说：用户只看到「点了没反应」
+      toast(state.browserOk ? '浏览器已经开着，已连接' : '浏览器开着但还连不上，稍等几秒再试', state.browserOk ? 'ok' : 'err');
+    } else {
       await alertDialog('浏览器已打开', '在刚打开的 Chrome 窗口里登录 BOSS直聘（和其它要用的招聘网站），'
         + '登录一次就会记住。登录好之后回来点「采集」。', 'ok');
     }
@@ -1168,6 +1258,41 @@ async function launchBrowser() {
 
 function scheduleBrowserCheck() {
   setTimeout(async () => { await checkBrowser(); scheduleBrowserCheck(); }, document.hidden ? 60000 : 10000);
+}
+
+/* ---------------- 账号切换 ----------------
+   两个求职账号分开投递，一次只用一个。每个账号有自己的简历、搜索条件、岗位池、投递记录、
+   今日额度和调试 Chrome（登录资料分开、端口也分开）；AI 设置和风控规则两边共用。
+   切换会整页刷新：页面上的每个数字都要换成另一个账号的，留一点旧数据都可能让人看错、投错。 */
+async function loadAccounts() {
+  const res = await get('/api/accounts');
+  if (res.error || !Array.isArray(res.accounts)) return;
+  const box = $('accountSwitch');
+  clear(box);
+  for (const acc of res.accounts) {
+    box.appendChild(el('button', {
+      class: 'acct-item' + (acc.active ? ' is-active' : ''), type: 'button', role: 'radio',
+      'aria-checked': acc.active ? 'true' : 'false', text: acc.name,
+      title: acc.active ? '当前账号' : '切换到' + acc.name,
+      onclick: acc.active ? null : () => switchAccount(acc, res.running),
+    }));
+  }
+}
+
+async function switchAccount(acc, running) {
+  if (running || (state.status && state.status.running)) {
+    await alertDialog('现在不能切换', '有任务正在运行。先停止，或者等它跑完再切换账号。', 'warn');
+    return;
+  }
+  const ok = await confirmDialog('切换到' + acc.name + '？',
+    '切换后岗位池、投递记录、简历、搜索条件都换成' + acc.name + '的；AI 设置和风控规则两边共用。\n'
+    + '每个账号有自己的调试 Chrome：切换后点左下角「启动浏览器」，打开的就是' + acc.name + '的浏览器'
+    + (acc.ready ? '。' : '（第一次用要在里面登录各个招聘网站）。'),
+    { okText: '切换' });
+  if (!ok) return;
+  const res = await post('/api/accounts/switch', { id: acc.id });
+  if (res.error) { await alertDialog('没能切换', res.error, 'warn'); return; }
+  location.reload();
 }
 
 /* ---------------- 初始化 ---------------- */
@@ -1227,6 +1352,7 @@ function init() {
   $('btnFollowUp').addEventListener('click', () => startFollowUp());
   $('btnChecks').addEventListener('click', openChecks);
   $('btnLaunchBrowser').addEventListener('click', launchBrowser);
+  loadAccounts();
   $('btnDrawerClose').addEventListener('click', closeDrawer);
   $('drawerBackdrop').addEventListener('click', closeDrawer);
 

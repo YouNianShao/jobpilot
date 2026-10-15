@@ -13,7 +13,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from ..config import CONFIG_PATH, DATA_DIR, DB_PATH, load_config
+from ..config import ACCOUNT_DIR, CONFIG_PATH, DB_PATH, load_config
 
 
 def _snapshot_db(dest: Path) -> int:
@@ -30,7 +30,7 @@ def _snapshot_db(dest: Path) -> int:
 def build_backup(dest: Path) -> dict:
     cfg = load_config(CONFIG_PATH)   # 用本模块这个路径，保证"读的配置"和"打包的配置"是同一份
     written: list[str] = []
-    resume_dir = DATA_DIR / "resumes"
+    resume_dir = ACCOUNT_DIR / "resumes"
 
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
         db_copy = dest.with_suffix(".db")

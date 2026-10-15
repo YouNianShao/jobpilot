@@ -57,7 +57,7 @@ def test_post_config_rejects_contradictions_without_saving(client):
 
 def test_post_config_saves_valid_payload(client):
     http, path = client
-    assert http.post("/api/config", json={"scoring": {"threshold": 70}}).json() == {"ok": True}
+    assert http.post("/api/config", json={"scoring": {"threshold": 70}}).json()["ok"] is True
     assert "threshold: 70" in path.read_text(encoding="utf-8")
 
 

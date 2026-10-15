@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from jobpilot.browser import create_browser  # noqa: E402
 from jobpilot.platforms.zhaopin import JS_LIST, search_url  # noqa: E402
 
-browser = create_browser("http://127.0.0.1:9222")
+browser = create_browser("http://127.0.0.1:9333")
 page = browser.open(search_url("数据分析"))
 print("wait .job-card:", page.wait_for(".job-card", timeout_ms=15000))
 raw = page.eval(JS_LIST)

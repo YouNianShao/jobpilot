@@ -29,7 +29,7 @@ def _arg(name: str, default: str) -> str:
 def main() -> int:
     platform = _arg("--platform", "51job")
     keyword = _arg("--keyword", "数据分析")
-    cdp = _arg("--cdp", "http://127.0.0.1:9222")
+    cdp = _arg("--cdp", "http://127.0.0.1:9333")
 
     cfg = AppConfig()
     plat = cfg.platforms[platform]

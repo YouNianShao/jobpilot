@@ -84,3 +84,46 @@ export function cityPicker(initial, catalog, platformName) {
   wrap.appendChild(hint);
   return wrap;
 }
+
+
+/* 关键词：和城市一样的「标签」输入 —— 输入一个词回车（或打逗号），就变成一个带 × 的标签，
+   有确认感，也一眼看得出现在到底有几个关键词（以前是一行「agent,AI,数据分析」）。
+   值仍写在 hidden input（id 不变）里，保存配置照旧按 id 读；外面要加词就 dispatch 'chip-add'。 */
+export function keywordChips(id, initial) {
+  const hidden = el('input', { type: 'hidden', id });
+  const chipBox = el('span', { class: 'chip-box' });
+  const entry = el('input', { class: 'chip-input', placeholder: '输入关键词，回车添加…', 'aria-label': '添加关键词' });
+  const box = el('div', { class: 'chips' }, [chipBox, entry]);
+  const hint = el('div', { class: 'hint' });
+  let items = (initial || []).filter(Boolean).slice();
+  function render() {
+    hidden.value = items.join(',');
+    clear(chipBox);
+    for (const word of items) {
+      chipBox.appendChild(el('span', { class: 'chip' }, [word,
+        el('button', { class: 'chip-x', type: 'button', title: '移除', 'aria-label': '移除 ' + word,
+          onclick: () => { items = items.filter((x) => x !== word); render(); } }, [icon('x')])]));
+    }
+    hint.textContent = items.length ? '共 ' + items.length + ' 个关键词 · 采集时每个关键词 × 每个城市各搜一遍'
+      : '还没有关键词：采集会没有东西可搜';
+    hint.className = 'hint' + (items.length ? '' : ' warn');
+  }
+  const add = (raw) => {
+    let changed = false;
+    for (const part of String(raw || '').split(/[,，、;；\n]+/)) {
+      const word = part.trim();
+      if (word && !items.includes(word)) { items.push(word); changed = true; }
+    }
+    if (changed) render();
+    return changed;
+  };
+  entry.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ',' || event.key === '，') { event.preventDefault(); add(entry.value); entry.value = ''; }
+    else if (event.key === 'Backspace' && !entry.value && items.length) { items.pop(); render(); }
+  });
+  entry.addEventListener('input', () => { if (/[,，]/.test(entry.value)) { add(entry.value); entry.value = ''; } });   // 输入法下逗号不一定触发 keydown
+  entry.addEventListener('blur', () => { if (entry.value.trim()) { add(entry.value); entry.value = ''; } });
+  hidden.addEventListener('chip-add', (event) => add(event.detail));
+  render();
+  return el('div', { class: 'city-field' }, [hidden, box, hint]);
+}

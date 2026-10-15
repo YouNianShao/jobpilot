@@ -11,11 +11,14 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config.yaml"
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "jobpilot.db"
+# 当前账号自己的数据目录（定制简历、浏览器登录资料）。账号 A = data/，账号 B = data/accounts/B/。
+# CONFIG_PATH / DB_PATH / ACCOUNT_DIR 都会在切换账号时被 accounts.activate() 改掉。
+ACCOUNT_DIR = DATA_DIR
 
 
 class BrowserCfg(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
-    cdp_url: str = "http://127.0.0.1:9223"
+    cdp_url: str = "http://127.0.0.1:9333"
 
 
 class AiCfg(BaseModel):
@@ -145,6 +148,18 @@ class SafetyCfg(BaseModel):
     # 每平台覆盖：BOSS 这类高风控平台设得更保守（见 _default_safety_overrides）
     platforms: dict[str, PlatformSafetyCfg] = Field(default_factory=lambda: _default_safety_overrides())
 
+    @field_validator("platforms", mode="after")
+    @classmethod
+    def _add_missing_platform_defaults(cls, value: dict) -> dict:
+        """已有的 config.yaml 里没写的平台，补上内置的保守默认（例如新加的猎聘）；写了的照用户的来。
+
+        否则新加的平台默认值只对「从没保存过配置」的人生效 —— 而每个人都保存过。
+        """
+        merged = dict(value or {})
+        for key, cfg in _default_safety_overrides().items():
+            merged.setdefault(key, cfg)
+        return merged
+
     # 开页面之间的间隔（每个平台独立计时）。这是最容易被判定为机器人的特征，
     # 也是本项目第一条硬约束：任何开页面动作都要先经过它。
     page_interval_min_seconds: float = Field(default=2.5, ge=0)
@@ -228,7 +243,7 @@ class SafetyCfg(BaseModel):
 
 
 def _default_safety_overrides() -> dict[str, PlatformSafetyCfg]:
-    """BOSS 的反爬最强，默认就更保守；其它平台用全局默认。"""
+    """BOSS 的反爬最强，默认就更保守；猎聘详情页也会拦（2026-10-15），同样放慢；其它平台用全局默认。"""
     return {
         "boss": PlatformSafetyCfg(
             daily_pages=DailyPages(collect_search=40, collect_detail=200, apply=30, monitor=30, total=300),
@@ -236,6 +251,14 @@ def _default_safety_overrides() -> dict[str, PlatformSafetyCfg]:
             risk_lock_minutes=60,
             max_pages_per_10min=8,
             max_pages_per_hour=30,
+        ),
+        # 猎聘：2026-10-15 抓 JD 时触发风控。参照 BossHunter 的猎聘节奏（详情页间隔 10–18 秒）：
+        # 2.5–7 秒 × 3.0 ≈ 7.5–21 秒，均值约 14 秒；每 10 分钟最多 6 页、每小时 25 页、详情页每天 90 页
+        "liepin": PlatformSafetyCfg(
+            daily_pages=DailyPages(collect_search=30, collect_detail=90, apply=60, monitor=40, total=180),
+            delay_multiplier=3.0,
+            max_pages_per_10min=6,
+            max_pages_per_hour=25,
         ),
     }
 
@@ -245,7 +268,8 @@ def _default_platforms() -> dict[str, PlatformCfg]:
 # BOSS 的列表页没有薪资、也没有 JD，所以默认开详情页；关掉就只剩标题/公司/城市
         "boss": PlatformCfg(enabled=True, cities=["上海"], keywords=["AI"], apply=False, fetch_detail=True),
         "51job": PlatformCfg(enabled=True, cities=["上海"], keywords=["AI"], apply=True),
-        "liepin": PlatformCfg(enabled=True, cities=["上海"], keywords=["AI"], apply=True),
+        # 猎聘默认每个关键词只翻 1 页：翻得越深、详情页开得越多，越容易被拦（2026-10-15）
+        "liepin": PlatformCfg(enabled=True, cities=["上海"], keywords=["AI"], apply=True, max_pages=1),
         "zhaopin": PlatformCfg(enabled=True, cities=["上海"], keywords=["AI"], apply=False),
     }
 

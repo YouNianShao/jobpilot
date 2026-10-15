@@ -109,3 +109,13 @@ def test_risk_signals_cover_platforms_without_false_positives():
     # 泛化短语：没有风控语境就不算（普通岗位描述里真的会出现）
     assert classify_risk('如未接通请稍后再试') is None
     assert classify_risk('AI 产品经理 20-25K 上海') is None
+
+
+def test_window_ending_at_midnight_or_crossing_it():
+    """「08:00-00:00」= 到半夜十二点；「22:00-02:00」跨过半夜。以前这两种都被当成一分钟都不开。"""
+    assert parse_windows("08:00-00:00") == [(480, 1440)]
+    assert in_send_window("08:00-00:00", datetime(2026, 1, 1, 23, 24)) is True
+    assert in_send_window("08:00-00:00", datetime(2026, 1, 1, 7, 59)) is False
+    assert in_send_window("22:00-02:00", datetime(2026, 1, 1, 1, 30)) is True
+    assert in_send_window("22:00-02:00", datetime(2026, 1, 1, 12, 0)) is False
+    assert in_send_window("09:00-09:00", datetime(2026, 1, 1, 9, 0)) is False   # 开始 = 结束：不开，也不能变成「不限制」
