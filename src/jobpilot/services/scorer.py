@@ -47,7 +47,38 @@ def _passed_status(ctx: ServiceContext) -> str:
     return Status.PENDING_CONFIRM.value if ctx.config.confirm.required else Status.APPROVED.value
 
 
-def score_jobs(ctx: ServiceContext, platform: str, *, limit: int = 100, resume_text: str = "") -> dict:
+BATCH = 100
+
+
+def score_jobs(ctx: ServiceContext, platform: str, *, limit: int | None = None, resume_text: str = "") -> dict:
+    """给待评分的岗位打分。``limit`` 为空 = **全部评完**（按 100 个一批，一批接一批）。
+
+    2026-10-16：以前固定只取 100 个，其中被预筛淘汰的也算在这 100 里，所以 300 个待评分
+    点一次只评掉七八十个，要点好几次。现在一直评到没有待评分的为止；
+    某一批一个都没处理掉（全部调用失败）就停下，不会对着同一批死循环。
+    """
+    if limit is not None:
+        return _score_batch(ctx, platform, limit=limit, resume_text=resume_text)
+    total: dict | None = None
+    while True:
+        ctx.stop.check()
+        batch = _score_batch(ctx, platform, limit=BATCH, resume_text=resume_text)
+        if total is None:
+            total = batch
+        else:
+            for key in ("scored", "prefiltered", "failed", "total", "already_scored"):
+                total[key] = int(total.get(key) or 0) + int(batch.get(key) or 0)
+            total["fail_reason"] = total.get("fail_reason") or batch.get("fail_reason", "")
+        if batch.get("error") or batch.get("total", 0) < BATCH:
+            break                                     # 出错（例如没简历）或这一批已经是最后一批
+        if not (batch.get("scored") or batch.get("prefiltered") or batch.get("already_scored")):
+            break                                     # 一个都没处理掉：多半是模型调用全失败，别对着同一批空转
+    if total and total.get("error") and total.get("scored"):
+        total.pop("error", None)
+    return total or {"platform": platform, "scored": 0, "total": 0}
+
+
+def _score_batch(ctx: ServiceContext, platform: str, *, limit: int, resume_text: str = "") -> dict:
     jobs = ctx.repo.list_jobs(platform=platform, status=Status.NEW.value, limit=limit)
     total = len(jobs)
     resume = resume_text
@@ -99,29 +130,54 @@ def score_jobs(ctx: ServiceContext, platform: str, *, limit: int = 100, resume_t
         else:
             pending.append(job)
 
+    skipped = 0
+
+    def still_new(job: Job) -> bool:
+        """调模型前再看一眼：别的任务（另一个平台的全流程 / 独立评分）可能刚评过它，
+        再评一次就是白花一份 token。只在当前线程查库（连接不在工作线程里共用）。"""
+        nonlocal skipped
+        fresh = ctx.repo.get_job(job.id)
+        if fresh is None or fresh.status != Status.NEW.value:
+            skipped += 1
+            return False
+        return True
+
     concurrency = max(1, int(ctx.config.scoring.concurrency))
     if concurrency <= 1:
         for index, job in enumerate(pending, 1):
             ctx.stop.check()
             ctx.progress(index, len(pending), f"{job.title}@{job.company}")
-            save(job, _call(ctx, job, resume))
+            if still_new(job):
+                save(job, _call(ctx, job, resume))
     else:
-        # 工作线程只调模型，写库只在当前线程做。停止时：还没开始的请求直接取消；
-        # 已经发出去的（最多 concurrency 条）等它们回来，结果照样落库 —— token 已经花了。
+        # 工作线程只调模型，写库只在当前线程做。请求按需提交（同时最多 concurrency 条），
+        # 这样每条在发出前都能重新确认「还没被别的任务评过」；停止时还没提交的直接不发，
+        # 已经发出去的等它们回来，结果照样落库 —— token 已经花了。
         pool = ThreadPoolExecutor(max_workers=concurrency)
-        futures = {pool.submit(_call, ctx, job, resume): job for job in pending}
-        saved = set()
+        queue = list(pending)
+        futures: dict = {}
+        done = 0
+
+        def fill() -> None:
+            while queue and len(futures) < concurrency:
+                job = queue.pop(0)
+                if still_new(job):
+                    futures[pool.submit(_call, ctx, job, resume)] = job
+
         try:
-            for done, future in enumerate(as_completed(futures), 1):
-                job = futures[future]
+            fill()
+            while futures:
+                future = next(as_completed(futures))
+                job = futures.pop(future)
+                done += 1
                 ctx.progress(done, len(pending), f"{job.title}@{job.company}")
                 save(job, future.result())
-                saved.add(future)
                 ctx.stop.check()
+                fill()
         except StopRequested:
             pool.shutdown(wait=True, cancel_futures=True)
             for future, job in futures.items():
-                if future not in saved and not future.cancelled() and future.exception() is None:
+                if not future.cancelled() and future.exception() is None:
                     save(job, future.result())
             raise
         finally:
@@ -130,5 +186,7 @@ def score_jobs(ctx: ServiceContext, platform: str, *, limit: int = 100, resume_t
     return {
         "platform": platform, "scored": scored, "prefiltered": prefiltered,
         "failed": failed, "fail_reason": fail_reason, "total": total,
+        # 被别的任务抢先评过、这里没再花 token 的岗位数
+        "already_scored": skipped,
         "prompt": f"{PROMPT} {version(PROMPT)}",
     }

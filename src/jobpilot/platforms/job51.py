@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
+from ..browser import humanize
 from ..models import ApplyResult, CollectResult, Job, MonitorResult
+from ..safety.attention import release_page
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
 from .base import DriverContext, _ago, explain_missing, stop_if_risky
@@ -18,6 +20,8 @@ from .base import DriverContext, _ago, explain_missing, stop_if_risky
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={city}&keyword={kw}&searchType=2&keywordType=&page={page}"
 # 2026-10-10 实机验证：列表里的公司链接路径段是 /all/，岗位详情同一段可用
 JOB_URL = "https://jobs.51job.com/all/{job_id}.html"
+# 列表页拟人悬停的目标：每条岗位一个 .joblist-item
+CARD_SELECTOR = ".joblist-item"
 
 CITY_CODES: dict[str, str] = {
     "上海": "020000", "北京": "010000", "广州": "030200", "深圳": "040000",
@@ -110,7 +114,7 @@ class Job51Driver:
     key = "51job"
     name = "前程无忧"
     # 2026-10-14 两次真机投递都跑通（第二次自动在「我的申请」核实成功）后开放 apply
-    capabilities = frozenset({"collect", "apply"})
+    capabilities = frozenset({"collect", "apply", "monitor"})   # monitor：2026-10-16 真机只读核验「我的投递」
 
     # 界面用这两个属性判断「城市是否受限」：受限的平台填了表外的城市会被跳过
     supported_cities = CITY_CODES
@@ -139,7 +143,8 @@ class Job51Driver:
                     continue
                 for keyword in cfg.keywords:
                     slot = f"{city}|{keyword}"
-                    for page_no in range(1, cfg.max_pages + 1):
+                    run = ctx.slot_begin(slot, keyword, city, cfg.max_pages)
+                    for page_no in range(1, run.limit + 1):
                         recent = ctx.skip_recently_collected(slot, page_no)
                         if recent is not None:
                             result.skipped += 1
@@ -152,14 +157,17 @@ class Job51Driver:
                             page_obj = ctx.browser.open(url)
                         else:
                             page_obj.goto(url)
-                        if not page_obj.wait_for(".joblist-item", timeout_ms=12000):
+                        if not page_obj.wait_for(".joblist-item", timeout_ms=30000):
                             explain_missing(page_obj, f"[51job] 搜索页 {city}/{keyword}")
 
                         items = parse_list(page_obj.eval(JS_LIST))
                         if not items:
                             break
                         result.seen += len(items)
+                        new_before = result.new
                         ctx.log(f"[51job] {city}/{keyword} 第 {page_no} 页 {len(items)} 条")
+                        # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
+                        humanize.after_list(ctx, page_obj, CARD_SELECTOR)
 
                         for item in items:
                             ctx.stop.check()
@@ -191,6 +199,9 @@ class Job51Driver:
                             else:
                                 result.duplicate += 1
                         ctx.note_collect(slot, page_no)
+                        if ctx.slot_page(run, page_no, seen=len(items), new=result.new - new_before):
+                            break
+                    ctx.slot_end(result, run)
         except Denied as exc:
             if is_graceful_stop(exc):
                 result.stopped = exc.reason
@@ -199,11 +210,7 @@ class Job51Driver:
                 raise
         finally:
             for page in (page_obj, detail_page):
-                if page is not None:
-                    try:
-                        page.close()
-                    except Exception:  # noqa: BLE001
-                        pass
+                release_page(page)   # 验证 / 掉登录的那一页留给你处理
         if skipped_cities and len(skipped_cities) == len(cfg.cities):
             result.stopped = ("配置的城市都不在内置表里：" + "、".join(skipped_cities)
                               + "（51job 目前只内置 15 个城市）")
@@ -219,7 +226,7 @@ class Job51Driver:
             page = ctx.browser.open(url)
         else:
             page.goto(url)
-        if not page.wait_for(".bmsg", timeout_ms=18000):
+        if not page.wait_for(".bmsg", timeout_ms=30000):
             stop_if_risky(page, "[51job] 详情页")       # 是验证码 / 访问频繁就停手，不是才跳过这一个
             ctx.log(f"[51job] 详情页没等到 JD 容器，已跳过：{url}")
             return "", page
@@ -227,6 +234,8 @@ class Job51Driver:
         for _ in range(6):
             text = str(page.eval(JS_DETAIL) or "").strip()
             if text:
+                # 读到 JD 后像人一样读一会儿再走：秒开秒关、从不滚动的详情页访问是很明显的机器特征
+                humanize.after_detail(ctx, page, text)
                 return text, page
             ctx.stop.sleep(1.5)
         stop_if_risky(page, "[51job] 详情页")
@@ -257,20 +266,22 @@ class Job51Driver:
         ctx.reserve("apply")                      # 核对也是开页面：记在投递额度上、过同一道闸门
         page = ctx.browser.open(self.MY_APPLY_URL)
         try:
-            page.wait_for("body", timeout_ms=15000)
+            page.wait_for("body", timeout_ms=30000)
             for _ in range(3):                    # 列表是异步加载的，等一会儿再读
                 ctx.stop.sleep(2)
                 if in_apply_list(page.text(), job.title, job.company):
                     return True
             return False
         finally:
-            try:
-                page.close()
-            except Exception:  # noqa: BLE001
-                pass
+            release_page(page)   # 验证 / 掉登录的那一页留给你处理
 
     def monitor(self, ctx: DriverContext) -> MonitorResult:
-        return MonitorResult()
+        """HR 进展：只读「我的申请」列表（感兴趣 / 邀面试 / 已查阅…），不点、不进会话。"""
+        from .record_monitor import monitor_records
+
+        # 前程无忧每一行不写进展，进展 = 所在的筛选栏（已查阅 / 感兴趣 / 邀面试），依次切过去看
+        return monitor_records(ctx, platform=self.key, url=self.MY_APPLY_URL, ready="body", label="前程无忧「我的申请」",
+                               tabs=("已查阅", "感兴趣", "邀面试"))
 
 
 DRIVER = Job51Driver()

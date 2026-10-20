@@ -32,18 +32,24 @@ export function icon(name, cls) {
 const TOAST_ICON = { ok: 'check', err: 'alert', warn: 'alert' };
 
 /* 轻提示：成功 2.6 秒自动消失；错误留 6 秒、可以手动关（错误信息常常需要多看两眼） */
-/* 翻页条（岗位池 / 任务历史 / 风控事件共用）：
-   box = 容器；info = {page, pages, total, limit}；go(n) = 翻到第 n 页。只有一页时整条隐藏。 */
-export function renderPager(box, info, go) {
+/* 翻页条（岗位池 / 任务历史 / 风控事件 / 监测页共用）：
+   box = 容器；info = {page, pages, total, limit}；go(n) = 翻到第 n 页。只有一页时整条隐藏。
+   sizes = {options: [20, 50, 100], onChange(n)}（可选）：带「每页 N 条」下拉。
+   带了下拉时，只要总数超过最小档就显示整条 —— 否则一页装得下时，用户就没处把每页改小 / 改回去。 */
+export function renderPager(box, info, go, sizes) {
   clear(box);
-  if (!info || info.pages <= 1) { box.hidden = true; return; }
+  const options = (sizes && sizes.options) || [];
+  const showSizes = !!(info && options.length && info.total > Math.min(...options));
+  if (!info || (info.pages <= 1 && !showSizes)) { box.hidden = true; return; }
   box.hidden = false;
   const page = info.page;
   const to = (n) => { const target = Math.min(Math.max(1, n), info.pages); if (target !== page) go(target); };
-  const from = (page - 1) * info.limit + 1;
+  const from = info.total ? (page - 1) * info.limit + 1 : 0;
   const end = Math.min(info.total, page * info.limit);
   box.appendChild(el('span', { class: 'pager-info', text: '第 ' + from + '–' + end + ' 条，共 ' + info.total + ' 条' }));
+  if (showSizes) box.appendChild(pageSizeSelect(options, info.limit, sizes.onChange));
   box.appendChild(el('div', { class: 'grow' }));
+  if (info.pages <= 1) return;   // 只有一页：留着「每页 N 条」，不画页码
   const nav = el('nav', { class: 'pager-nav', 'aria-label': '翻页' });
   nav.appendChild(el('button', { class: 'btn small ghost', type: 'button', text: '上一页', disabled: page <= 1, onclick: () => to(page - 1) }));
   // 页码：首页、末页、当前页前后各两页，其余用省略号
@@ -67,6 +73,27 @@ export function renderPager(box, info, go) {
     });
     box.appendChild(el('label', { class: 'pager-jump-wrap' }, ['跳至', jump, '页']));
   }
+}
+
+/* 「每页 N 条」下拉；当前值不在选项里（比如旧的 50 条接口）也照样显示出来，不会悄悄跳档 */
+export function pageSizeSelect(options, current, onChange) {
+  const values = options.includes(current) ? options : [...options, current].sort((a, b) => a - b);
+  const select = el('select', {
+    class: 'select pager-size', 'aria-label': '每页显示条数',
+    onchange: (event) => onChange(Number(event.target.value)),
+  }, values.map((n) => el('option', { value: String(n), text: String(n), selected: n === current })));
+  return el('label', { class: 'pager-size-wrap' }, ['每页', select, '条']);
+}
+
+/* 每页条数记在浏览器里（按表区分）：刷新 / 下次打开还是用户选的那一档 */
+export function loadPageSize(key, options, fallback) {
+  let saved = 0;
+  try { saved = Number(localStorage.getItem('jp.pageSize.' + key)) || 0; } catch (e) { saved = 0; }
+  return options.includes(saved) ? saved : fallback;
+}
+
+export function savePageSize(key, size) {
+  try { localStorage.setItem('jp.pageSize.' + key, String(size)); } catch (e) { /* 隐私模式存不了就不记 */ }
 }
 
 /* options.action / options.onAction：提示里带一个按钮（例如「撤销」），点了执行并关掉提示 */

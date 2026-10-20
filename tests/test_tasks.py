@@ -42,13 +42,14 @@ def test_confirm_task_completes(tmp_path):
 
 
 def test_single_task_mutex(tmp_path, monkeypatch):
+    # 现在只有占用同一资源（同一平台 / AI 批处理）才互斥；confirm 不占任何平台，可以并行（见 test_parallel_tasks）
     import jobpilot.tasks as tasks_module
 
     monkeypatch.setattr(tasks_module, "run_flow", lambda *a, **k: (time.sleep(0.3), {"ok": True})[1])
     runner = TaskRunner(ctx_factory(tmp_path))
-    runner.start("confirm", "boss")
+    runner.start("score", "")
     with pytest.raises(TaskAlreadyRunning):
-        runner.start("confirm", "boss")
+        runner.start("score", "")
     assert wait(runner)["status"] == "completed"
 
 

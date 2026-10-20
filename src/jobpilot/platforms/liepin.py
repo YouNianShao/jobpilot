@@ -14,12 +14,16 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
+from ..browser import humanize
 from ..models import ApplyResult, CollectResult, Job, MonitorResult
+from ..safety.attention import release_page
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
 from .base import DriverContext, _ago, explain_missing, stop_if_risky
 
 SEARCH_URL = "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}"
+# 列表页拟人悬停的目标：岗位锚点（data-nick 是稳定属性）
+CARD_SELECTOR = '[data-nick="job-detail-job-info"]'
 JOB_URL = "https://www.liepin.com/job/{job_id}.shtml"
 
 JS_LIST = r"""
@@ -90,7 +94,7 @@ class LiepinDriver:
     key = "liepin"
     name = "猎聘"
     # 2026-10-14 第一次真机投递跑通（「我的投递」核实）后开放 apply
-    capabilities = frozenset({"collect", "apply"})
+    capabilities = frozenset({"collect", "apply", "monitor"})   # monitor：2026-10-16 真机只读核验「我的投递」
 
     def collect(self, ctx: DriverContext) -> CollectResult:
         cfg = ctx.config.platforms.get(self.key)
@@ -106,7 +110,8 @@ class LiepinDriver:
         try:
             for keyword in cfg.keywords:
                 slot = keyword
-                for page_no in range(1, cfg.max_pages + 1):
+                run = ctx.slot_begin(slot, keyword, "", cfg.max_pages)
+                for page_no in range(1, run.limit + 1):
                     recent = ctx.skip_recently_collected(slot, page_no)
                     if recent is not None:
                         result.skipped += 1
@@ -119,14 +124,17 @@ class LiepinDriver:
                         page_obj = ctx.browser.open(url)
                     else:
                         page_obj.goto(url)
-                    if not page_obj.wait_for('[data-nick="job-detail-job-info"]', timeout_ms=12000):
+                    if not page_obj.wait_for('[data-nick="job-detail-job-info"]', timeout_ms=30000):
                         explain_missing(page_obj, f"[liepin] 搜索页 {keyword}")
 
                     items = parse_list(page_obj.eval(JS_LIST))
                     if not items:
                         break
                     result.seen += len(items)
+                    new_before = result.new
                     ctx.log(f"[liepin] {keyword} 第 {page_no} 页 {len(items)} 条")
+                    # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
+                    humanize.after_list(ctx, page_obj, CARD_SELECTOR)
 
                     for item in items:
                         ctx.stop.check()
@@ -161,6 +169,9 @@ class LiepinDriver:
                         else:
                             result.duplicate += 1
                     ctx.note_collect(slot, page_no)
+                    if ctx.slot_page(run, page_no, seen=len(items), new=result.new - new_before):
+                        break
+                ctx.slot_end(result, run)
         except Denied as exc:
             if is_graceful_stop(exc):
                 result.stopped = exc.reason
@@ -169,24 +180,8 @@ class LiepinDriver:
                 raise
         finally:
             for page in (page_obj, detail_page):
-                if page is not None:
-                    try:
-                        page.close()
-                    except Exception:  # noqa: BLE001
-                        pass
+                release_page(page)   # 验证 / 掉登录的那一页留给你处理
         return result
-
-    @staticmethod
-    def _read_like_a_person(ctx: DriverContext, page) -> None:
-        """读到 JD 后往下滚一段、停几秒再走：秒开秒关、从不滚动的详情页访问是很明显的机器特征。
-        （参照 BossHunter 的猎聘详情页：滚 1200px。停留时间可被「停止」打断。）"""
-        import random
-
-        try:
-            page.eval(f"window.scrollBy(0, {random.randint(600, 1400)})")
-        except Exception:  # noqa: BLE001 - 滚不动不影响拿到的 JD
-            pass
-        ctx.stop.sleep(random.uniform(2.0, 4.5))
 
     def _fetch_jd(self, ctx: DriverContext, page, url: str) -> tuple[str, object]:
         """打开详情页读 JD；预算不足时抛 Denied（由调用方决定是否继续）。"""
@@ -198,7 +193,7 @@ class LiepinDriver:
             page = ctx.browser.open(url)
         else:
             page.goto(url)
-        if not page.wait_for(".job-intro-container", timeout_ms=18000):
+        if not page.wait_for(".job-intro-container", timeout_ms=30000):
             stop_if_risky(page, "[liepin] 详情页")      # 是验证码 / 访问频繁就停手，不是才跳过这一个
             ctx.log(f"[liepin] 详情页没等到 JD 容器，已跳过：{url}")
             return "", page
@@ -206,7 +201,8 @@ class LiepinDriver:
         for _ in range(6):
             text = str(page.eval(JS_DETAIL) or "").strip()
             if text:
-                self._read_like_a_person(ctx, page)
+                # 读到 JD 后像人一样读一会儿再走：秒开秒关、从不滚动的详情页访问是很明显的机器特征
+                humanize.after_detail(ctx, page, text)
                 return text, page
             ctx.stop.sleep(1.5)
         stop_if_risky(page, "[liepin] 详情页")
@@ -240,20 +236,20 @@ class LiepinDriver:
         ctx.reserve("apply")                      # 核对也是开页面：记在投递额度上、过同一道闸门
         page = ctx.browser.open(self.MY_APPLY_URL)
         try:
-            page.wait_for("body", timeout_ms=15000)
+            page.wait_for("body", timeout_ms=30000)
             for _ in range(3):                    # 列表是异步加载的，等一会儿再读
                 ctx.stop.sleep(2)
                 if in_apply_list(page.text(), job.title, job.company):
                     return True
             return False
         finally:
-            try:
-                page.close()
-            except Exception:  # noqa: BLE001
-                pass
+            release_page(page)   # 验证 / 掉登录的那一页留给你处理
 
     def monitor(self, ctx: DriverContext) -> MonitorResult:
-        return MonitorResult()
+        """HR 进展：只读「我的投递」列表（已查看 / 邀请应聘 / 不合适…），不点、不进会话。"""
+        from .record_monitor import monitor_records
+
+        return monitor_records(ctx, platform=self.key, url=self.MY_APPLY_URL, ready="body", label="猎聘「我的投递」")
 
 
 DRIVER = LiepinDriver()

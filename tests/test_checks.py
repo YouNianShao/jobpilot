@@ -70,9 +70,13 @@ def test_checks_treat_missing_key_or_resume_as_hard_failures(tmp_path):
     assert rows["resume"]["level"] == "error"
 
 
-def test_checks_flag_unsupported_apply_switch(tmp_path):
+def test_checks_flag_unsupported_apply_switch(tmp_path, monkeypatch):
+    # 四个平台都已开放投递（智联 2026-10-16）：用一个只能采集的智联驱动来验「开关开着、驱动没声明 apply」
+    import jobpilot.platforms.zhaopin as zp
+
+    monkeypatch.setattr(zp.ZhaopinDriver, "capabilities", frozenset({"collect"}))
     ctx = make_ctx(tmp_path)
-    ctx.config.platforms["zhaopin"].apply = True   # 开关开着，但驱动没声明 apply（智联仍只有采集）
+    ctx.config.platforms["zhaopin"].apply = True
 
     report = run_checks(ctx)
 

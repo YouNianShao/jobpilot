@@ -1,0 +1,185 @@
+/* 概览布局（2026-10-20 一屏方案，效果图 onescreen-2560 / onescreen-1920）
+   上到下三行：流水线（压扁）→ 风控 + 趋势 → 任务监控台 + 待确认。
+   宽屏（≥1600 宽、≥820 高）且停在概览时：内容区放宽、正好一屏，最后一行吃掉剩下的高度，长内容在卡片里滚；
+   别的视图、窄屏照旧整页滚动。 */
+
+/* ---- 流水线（2026-10-20 第二版）：它是概览上最该先看的，放大到约 120px：
+   标题一行 → 大数字（左）+ 按钮（右）一行 → 说明一行；今日已投的进度条在说明上面 ---- */
+.ov .pipe { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 6px;
+  align-items: center; padding: 14px 18px; }
+.ov .pipe-top { grid-column: 1 / -1; grid-row: 1; min-width: 0; }
+.ov .pipe-v { grid-column: 1; grid-row: 2; justify-self: start; font-size: 34px; line-height: 1.05; }
+.ov .pipe > .btn { grid-column: 2; grid-row: 2; margin: 0; align-self: center; }
+.ov .pipe > .meter { grid-column: 1 / -1; }
+.ov .pipe-sub { grid-column: 1 / -1; min-height: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- 风控 + 趋势一行 ---- */
+/* 风控 : 趋势 = 2 : 3（2026-10-20：趋势图要宽才好看，风控一行的信息 900px 放得下） */
+.ov-mid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; align-items: stretch; }
+.ov-mid > .card { display: flex; flex-direction: column; min-height: 0; }
+.ov-mid > .card > .card-body { flex: 1 1 auto; min-height: 0; padding: 12px 16px; }
+.ov-mid .card-head { min-height: 46px; padding: 6px 16px; }
+
+/* 风控：四个平台各一行（不再 4 张并排小卡） */
+.ov .rtiles { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.ov .rtile { display: grid; grid-template-columns: minmax(130px, auto) auto minmax(160px, 1fr) auto 14px; align-items: center;
+  column-gap: 14px; row-gap: 4px; padding: 7px 12px; }
+.ov .rtile-head { flex-wrap: nowrap; }
+.ov .rtile > .psafe-sum { margin: 0; grid-template-columns: repeat(3, minmax(64px, auto)); justify-content: end; gap: 16px; }
+.ov .psafe-sum .kv { grid-auto-flow: column; align-items: baseline; gap: 6px; }
+.ov .rtile > .lock { grid-column: 1 / -1; }
+.ov .rtile > .psafe-next { white-space: nowrap; }
+/* 手风琴：展开的平台 = 标题行 + 明细（同一块框里），其余平台一行一行在下面，点哪行切哪个 */
+.racc { display: flex; flex-direction: column; min-width: 0; border-radius: var(--r); }
+.racc.is-open { border: 1px solid var(--accent-line); background: var(--fill-1); }
+.racc.is-open > .rtile { border-color: transparent; background: transparent; box-shadow: none; border-radius: var(--r) var(--r) 0 0; }
+.racc.is-open > .rdet { margin: 0; border: 0; border-top: 1px solid var(--line-soft); border-radius: 0 0 var(--r) var(--r);
+  background: transparent; animation: none; }
+.racc.is-open > .rdet::before { display: none; }
+.racc > .rtile-attn { padding: 6px 12px 10px; }
+.rtile-chev { color: var(--muted); font-size: 12px; text-align: right; grid-column: 5; grid-row: 1; }
+/* 收起的平台：四根迷你额度条（剩多少），四个平台一眼比较；展开后看具体数字 */
+.rtile-mini { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; min-width: 0; }
+.rmini { display: grid; grid-template-columns: auto minmax(20px, 1fr); align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--muted); }
+.rmini-bar { height: 5px; border-radius: 999px; background: var(--fill-3); overflow: hidden; }
+.rmini-bar > b { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
+.rmini-bar.t-warn > b { background: var(--warn); }
+.rmini-bar.t-bad > b { background: var(--bad); }
+.rtile:hover .rtile-chev { color: var(--text); }
+
+/* ---- 任务监控台 + 待确认：左右并排、等高，各自卡内滚动 ---- */
+.ov-work { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: stretch; }
+.ov-work > .card { min-height: 420px; max-height: 760px; }
+.ov-work > .card > .card-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.ov-work > .task-card > .card-body { display: flex; flex-direction: column; gap: 12px; }
+.ov-work > .task-card > .card-body > * { flex: none; margin-top: 0; }
+.ov-work > .task-card .tl { flex: 1 1 auto; min-height: 160px; display: flex; flex-direction: column; }
+.ov-work > .task-card .tl-list { flex: 1 1 auto; max-height: none; min-height: 0; }
+/* 一边空了也不缩成横条：空状态留在自己那一栏里，布局不跳（窄屏才缩，见下面） */
+.ov-work .task-card.is-compact > .card-head, .ov-work .pending-card.is-compact > .card-head { border-bottom: 1px solid var(--line-soft); }
+.ov-work .pending-card.is-compact #pendingIdleText { display: none; }
+.ov-work .pending-card.is-compact > #pending { display: grid; place-items: center; }
+/* 空闲的任务卡：今天跑过的任务从上往下排；今天一个都没跑过时空状态居中 */
+.ov-work .task-card.is-compact > .card-body { display: flex; flex-direction: column; }
+.ov-work .task-card.is-compact #taskList { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
+.ov-work .task-card.is-compact #taskList > .empty { margin: auto; }
+.ov-work { align-items: stretch; }
+#pending { align-content: start; }
+.pending-card > .pager { margin-top: auto; flex: none; border-top: 1px solid var(--line-soft); }
+
+/* 分平台投递：每个平台一行小进度条 */
+.tsubs { display: grid; gap: 4px; }
+.tsub { display: grid; grid-template-columns: 76px minmax(80px, 160px) 54px 72px minmax(0, 1fr); align-items: center;
+  column-gap: 10px; padding: 5px 10px; border-radius: var(--r-sm); background: var(--fill-1);
+  box-shadow: inset 2px 0 0 var(--lane); font-size: var(--fs-sm); }
+.tsub-name { color: var(--lane); font-weight: var(--fw-bold); white-space: nowrap; }
+.tsub-bar { height: 4px; border-radius: 999px; background: var(--fill-3, var(--fill-2)); overflow: hidden; }
+.tsub-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--lane); transition: width 600ms var(--ease); }
+.tsub-num { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.tsub-state { white-space: nowrap; color: var(--text-2); }
+.tsub-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.tsub.is-live .tsub-state { color: var(--lane); font-weight: var(--fw-bold); }
+.tsub.is-live .tsub-state::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%;
+  background: var(--lane); vertical-align: middle; animation: tl-pulse 1.8s ease-out infinite; }
+.tsub.is-live .tsub-note { color: var(--text-2); }
+.tsub.is-cool .tsub-state, .tsub.is-cool .tsub-note { color: var(--warn); }
+.tsub.is-stop .tsub-state, .tsub.is-stop .tsub-note { color: var(--bad); }
+.tsub.is-stop .tsub-bar > i { opacity: .4; }
+.tsub.is-ok .tsub-state { color: var(--ok); }
+
+/* ---- 宽屏（2026-10-20 第三版）：正好一屏。流水线按内容（~128）→ 风控 + 趋势固定高（屏幕的 ~34%）→
+   任务 + 投递队列吃掉剩下的高度。空闲时卡片里用「今天跑过的任务」/ 投递队列的另外两栏填满，不再空着
+   （第一版卡片里空一大片，第二版卡片外露一大片背景，都不好看） ---- */
+@media (min-width: 1600px) and (min-height: 820px) {
+  .shell:has(.view.ov.is-active) { height: 100vh; min-height: 0; }
+  .shell:has(.view.ov.is-active) .main { height: 100vh; min-height: 0; }
+  .main:has(.view.ov.is-active) { --content-max: 2320px; }
+  .main:has(.view.ov.is-active) .content { flex: 1 1 auto; min-height: 0; overflow: auto; padding-top: 16px; padding-bottom: 16px; }
+  .view.ov.is-active { flex: 1 1 auto; min-height: 0; display: grid; gap: 14px;
+    grid-template-rows: auto clamp(300px, 34vh, 440px) minmax(300px, 1fr); }
+  .view.ov.is-active > * { margin: 0; }
+  .ov .trend-card { --fit: 1; }   /* trends.js 看到它，图高就按卡片剩下的高度算 */
+  .ov .ov-work > .card { min-height: 0; max-height: none; }
+  .ov .ov-work > .card > .card-body { flex: 1 1 auto; }
+  .ov #risk { display: flex; flex-direction: column; }
+  .ov #risk > .rtiles { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
+  /* 收起的平台平分卡片高度（不留白）；展开的那块吃掉剩下的 */
+  .ov #risk > .rtiles > .racc { flex: 1 1 0; min-height: 0; }
+  .ov #risk > .rtiles > .racc > .rtile { flex: 1 1 auto; }
+  .ov #risk > .rtiles > .racc.is-open { flex: 3 1 0; }
+  .ov #risk > .rtiles > .racc.is-open > .rtile { flex: none; }
+  .ov .racc.is-open > .rdet { flex: 1 1 auto; align-content: center; }
+  .ov-mid > .card > .card-body { overflow: auto; }
+}
+/* 1920 一类的屏：风控一行放不下能力 / 跑任务中两个小标签时先藏掉，让降速提示完整 */
+@media (max-width: 2200px) {
+  .ov .rtile-head .pill { display: none; }
+}
+
+/* ---- 窄屏：退回一列，空的卡缩成一行横条 ---- */
+@media (max-width: 1180px) {
+  .ov-mid, .ov-work { grid-template-columns: minmax(0, 1fr); }
+  .ov-work > .card { min-height: 0; max-height: none; }
+  .ov-work > .card > .card-body { overflow: visible; }
+  .ov-work .task-card.is-compact > .card-body, .ov-work .pending-card.is-compact > #pending { display: none; }
+  .ov-work .task-card.is-compact > .card-head, .ov-work .pending-card.is-compact > .card-head { border-bottom: 0; }
+  .ov-work .pending-card.is-compact #pendingIdleText { display: inline; }
+  .ov .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tsub { grid-template-columns: 70px minmax(60px, 1fr) 50px 66px; }
+  .tsub-note { grid-column: 1 / -1; }
+}
+
+/* 屏幕不够高（1920×1000、1600×900 一类）：明细里先藏说明文字，四项额度 + 两个速率窗口始终在；行距收紧 */
+@media (min-width: 1600px) and (min-height: 820px) and (max-height: 1150px) {
+  .ov .racc.is-open > .rdet { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); padding: 8px 14px; gap: 16px; }
+  .ov .racc.is-open > .rdet > .rdet-intro { display: none; }
+  .ov .racc.is-open .mrows { gap: 4px; }
+  .ov .racc.is-open .rdet-h { margin-bottom: 4px; }
+  .ov .rtile { padding-top: 5px; padding-bottom: 5px; }
+}
+@media (min-width: 1600px) and (min-height: 820px) and (max-height: 960px) {
+  .ov #risk { padding-top: 8px; padding-bottom: 8px; }
+  .ov #risk > .rtiles { gap: 4px; }
+  .ov .racc.is-open .mrows { gap: 2px; }
+  .ov .racc.is-open .mrow { line-height: 1.35; }
+}
+/* 矮屏（≤960 高）：展开的平台再收紧一点，四项额度 + 速率在 300px 高的卡里放得下 */
+@media (min-width: 1600px) and (min-height: 820px) and (max-height: 960px) {
+  .ov #risk > .rtiles > .racc.is-open { flex: 4 1 0; }
+  .ov .racc.is-open > .rdet { padding: 4px 12px; }
+  .ov .racc.is-open .mrow { font-size: var(--fs-xs); }
+  .ov-mid .card-head { min-height: 40px; }
+}
+@media (min-width: 1600px) and (min-height: 820px) and (max-height: 960px) {
+  .ov #risk { padding-top: 6px; padding-bottom: 6px; }
+  .ov #risk > .rtiles { gap: 3px; }
+  .ov .rtile { padding-top: 3px; padding-bottom: 3px; }
+}
+@media (min-width: 1600px) and (min-height: 820px) and (max-height: 960px) {
+  .ov .racc.is-open .rdet-h { font-size: 10px; margin-bottom: 2px; line-height: 1.2; }
+}
+
+/* 投递队列：三栏切换；已确认 / 今日已投是紧凑的一行一个 */
+.q-tabs { margin-left: 4px; padding: 0; border-bottom: 0; flex-wrap: nowrap; }
+.q-tabs .seg-item b { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.q-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line-soft); background: var(--fill-1); }
+.q-row + .q-row { margin-top: 6px; }
+.q-title { all: unset; cursor: pointer; font-weight: var(--fw-bold); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-title:hover { color: var(--accent); }
+.q-title:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.q-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.ov .rtile-head .pill { display: none; }   /* 风控只有 40% 宽：能力 / 跑任务中小标签都藏掉（明细里有） */
+/* 风控卡变窄（1920 屏约 650px、1600 屏约 520px）：迷你条先去掉文字，再窄就不显示（明细里有） */
+.ov #risk { container: risk / inline-size; }
+@container risk (max-width: 760px) {
+  .rmini { grid-template-columns: minmax(14px, 1fr); }
+  .rmini > span { display: none; }
+  .ov .rtile { grid-template-columns: minmax(110px, auto) auto minmax(60px, 1fr) auto 14px; column-gap: 10px; }
+}
+@container risk (max-width: 600px) {
+  .rtile-mini { display: none; }
+  .ov .rtile { grid-template-columns: minmax(100px, auto) auto minmax(0, 1fr) auto 14px; }
+  .ov .rtile > .psafe-sum { gap: 10px; }
+}

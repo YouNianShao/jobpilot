@@ -111,6 +111,17 @@ def test_without_pending_it_applies_only_on_the_chosen_platforms(rig):
     assert out["steps"]["apply"]["applied"] == 1
 
 
+def test_full_reports_each_stage_in_order(rig):
+    """任务监控台的步骤条：全流程每走到一步就报一次（采集 → 评分 → 招呼语 → 投递）"""
+    ctx, cfg = rig
+    cfg.confirm.required = False
+    seen: list = []
+    ctx.stage = seen.append
+    ctx.llm = ScriptedLlm(score=10)
+    run(ctx, "full", None, registry=make_registry([]), plans=[{"platform": "pa"}])
+    assert seen == ["collect", "score", "greet", "apply"]
+
+
 def test_apply_after_off_stops_after_scoring(rig):
     ctx, cfg = rig
     cfg.confirm.required = False
@@ -144,3 +155,16 @@ def test_api_rejects_the_same_platform_twice(tmp_path):
     client = TestClient(create_app(lambda: None, runner=Idle()), base_url="http://127.0.0.1:8700")
     res = client.post("/api/tasks", json={"mode": "full", "plans": [{"platform": "boss"}, {"platform": "boss"}]})
     assert res.status_code == 400 and "两次" in res.json()["error"]
+
+
+def test_task_log_times_stay_aligned_with_logs():
+    """日志时间线：每行日志都带时间；有地方直接 append（没记时间）时补空，不会错位"""
+    from jobpilot.tasks import Task
+    task = Task(id="t1", mode="full", platform="pa")
+    task.log("一")
+    task.logs.append("二（没走 log）")
+    task.log("三")
+    snap = task.snapshot()
+    assert len(snap["log_times"]) == len(snap["logs"]) == 3
+    assert snap["log_times"][1] == "" and len(snap["log_times"][2]) == 8
+    assert snap["stage"] == ""

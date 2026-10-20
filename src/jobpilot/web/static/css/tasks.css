@@ -1,0 +1,126 @@
+/* 概览「任务监控台」（2026-10-20 效果图 ov2-tasks）：每个任务一条横道 + 一条合起来的日志时间线。
+   平台色用 app.css 里的 --tp-*（深 / 浅两套都验过）。动效只在运行中的横道上，开了「减少动态效果」全部关掉。 */
+.tp-boss { --lane: var(--tp-boss); }
+.tp-51job { --lane: var(--tp-51job); }
+.tp-liepin { --lane: var(--tp-liepin); }
+.tp-zhaopin { --lane: var(--tp-zhaopin); }
+.tp-x { --lane: var(--accent); }
+
+/* 卡片底：有任务在跑时铺一层很淡的细网格 */
+.task-card.is-live > .card-body {
+  background-image:
+    linear-gradient(var(--line-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 24px 24px; background-position: -1px -1px;
+}
+
+/* 一条横道 */
+.tlane { position: relative; display: grid; gap: 8px; padding: 12px 16px 12px 18px; border-radius: var(--r);
+  border: 1px solid var(--line-soft); background: var(--panel-solid); overflow: hidden; }
+.tlane::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--lane); }
+.tlane.is-run { border-color: color-mix(in srgb, var(--lane) 45%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lane) 12%, transparent), 0 0 22px -6px color-mix(in srgb, var(--lane) 55%, transparent); }
+.tlane.is-paused { border-style: dashed; border-color: color-mix(in srgb, var(--lane) 40%, transparent); }
+.tlane.is-done { opacity: .72; padding-top: 9px; padding-bottom: 9px; gap: 4px; }
+.tlane.is-done::before { opacity: .5; }
+.tlane-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.tlane-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--lane); flex: none; }
+.tlane.is-run .tlane-dot { box-shadow: 0 0 0 0 var(--lane); animation: tl-pulse 1.8s ease-out infinite; }
+.tlane-name { color: var(--lane); font-weight: var(--fw-bold); white-space: nowrap; }
+.tlane-clock { color: var(--text-2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.tlane-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mono { font-family: var(--mono); }
+
+/* 步骤条：做完打勾，当前这步亮起来，没到的变暗 */
+.tl-steps { list-style: none; display: inline-flex; align-items: center; gap: 4px; margin: 0 0 0 6px; padding: 0; }
+.tl-step { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm); color: var(--muted); }
+.tl-step + .tl-step::before { content: ''; width: 18px; height: 1px; background: var(--line-strong); margin-right: 2px; }
+.tl-step i { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font: var(--fw-bold) 10px/1 var(--mono);
+  font-style: normal; border: 1px solid var(--line-strong); }
+.tl-step.is-done { color: var(--text-2); }
+.tl-step.is-done i { background: color-mix(in srgb, var(--lane) 22%, transparent); border-color: transparent; color: var(--lane); }
+.tl-step.is-done + .tl-step::before { background: var(--lane); }
+.tl-step.is-now { color: var(--text); font-weight: var(--fw-bold); }
+.tl-step.is-now i { background: var(--lane); border-color: var(--lane); color: var(--accent-ink);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--lane) 70%, transparent); }
+.tlane.is-run .tl-step.is-now i { animation: tl-breathe 2.2s ease-in-out infinite; }
+.tl-step.is-skip { opacity: .5; }
+
+/* 进度条：平台色 + 一道光来回扫；没有总数时整条慢慢流动 */
+.tlane-bar { position: relative; height: 6px; border-radius: 999px; background: var(--fill-3, var(--fill-2)); overflow: hidden; }
+.tlane-bar > i { position: relative; display: block; height: 100%; border-radius: inherit; overflow: hidden;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--lane) 70%, transparent), var(--lane));
+  transition: width 600ms var(--ease); }
+.tlane-bar > i::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); }
+.tlane.is-run .tlane-bar > i::after { animation: tl-sweep 2s var(--ease) infinite; }
+.tlane-bar.is-indet > i { width: 35%; }
+.tlane.is-run .tlane-bar.is-indet > i { animation: tl-indet 1.8s ease-in-out infinite; }
+.tlane.is-paused .tlane-bar > i { background: repeating-linear-gradient(-45deg, var(--lane) 0 6px,
+  color-mix(in srgb, var(--lane) 55%, transparent) 6px 12px); }
+.tlane-foot { display: flex; align-items: baseline; gap: 12px; font-size: var(--fs-sm); color: var(--text-2); min-width: 0; }
+.tlane-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tlane-num { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tlane-log { display: flex; align-items: center; gap: 2px; min-width: 0; font-size: var(--fs-sm); color: var(--muted); }
+.tlane-log > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tlane-log::before { content: '›'; color: var(--lane); margin-right: 6px; }
+.tlane-caret { flex: none; width: 7px; height: 1.1em; background: var(--lane); opacity: .8; }
+.tlane.is-run .tlane-caret { animation: tl-blink 1.1s steps(1) infinite; }
+.tlane:not(.is-run) .tlane-caret { display: none; }
+
+/* 日志时间线 */
+.tl { display: grid; gap: 8px; margin-top: 4px; }
+.tl[hidden] { display: none; }
+.tl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: var(--fs-sm); }
+.tl-filter { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.tl-chip { all: unset; cursor: pointer; padding: 2px 10px; border-radius: 999px; font-size: var(--fs-sm);
+  border: 1px solid var(--line); color: var(--text-2); }
+.tl-chip:hover { border-color: var(--line-strong); color: var(--text); }
+.tl-chip:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.tl-chip.is-on { color: var(--text); border-color: var(--lane, var(--accent)); background: color-mix(in srgb, var(--lane, var(--accent)) 14%, transparent); }
+.tl-list { list-style: none; margin: 0; padding: 8px 12px; max-height: 260px; overflow: auto; display: grid; gap: 2px;
+  font: var(--fs-sm)/var(--lh-loose) var(--mono); background: var(--field-bg); border: 1px solid var(--line-soft); border-radius: var(--r-sm); }
+.tl-row { display: grid; grid-template-columns: 64px auto minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.tl-tag { padding: 0 6px; border-radius: var(--r-xs, 4px); font-size: var(--fs-xs); color: var(--lane);
+  background: color-mix(in srgb, var(--lane) 14%, transparent); white-space: nowrap; font-family: var(--font); }
+.tl-text { color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+
+@keyframes tl-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--lane) 60%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
+@keyframes tl-breathe { 50% { box-shadow: 0 0 2px color-mix(in srgb, var(--lane) 40%, transparent); } }
+@keyframes tl-sweep { to { transform: translateX(100%); } }
+@keyframes tl-indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(290%); } }
+@keyframes tl-blink { 50% { opacity: 0; } }
+
+@media (max-width: 760px) {
+  .tl-steps { order: 10; width: 100%; margin-left: 0; }
+  .tl-row { grid-template-columns: auto minmax(0, 1fr); }
+  .tl-row > time { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tlane *, .tlane *::before, .tlane *::after { animation: none !important; transition: none !important; }
+}
+
+/* 跑完的任务：一行，出错红字（2026-10-20 一屏概览里不许一个旧任务占一大块） */
+.tlane.is-done { display: flex; align-items: center; gap: 12px; padding: 7px 14px 7px 16px; }
+.tlane.is-done > .tlane-head { flex: none; flex-wrap: nowrap; }
+.tlane.is-done > .tlane-head .grow { display: none; }
+.tlane.is-done > .tlane-sum { flex: 1 1 auto; min-width: 0; order: 0; }
+.tlane.is-done > .tlane-head .tlane-clock { order: 9; margin-left: 4px; }
+.tlane-sum.is-bad { color: var(--bad); }
+.tlane-more { justify-self: start; }
+
+/* 运行日志：标题可点（折叠 / 展开），旁边一行说明这是什么。没有日志时整块不显示 */
+.tl[hidden], .ov-work > .task-card .tl[hidden] { display: none !important; }
+.tl-toggle { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: var(--r-sm); padding: 2px 4px; margin-left: -4px; }
+.tl-toggle:hover b { color: var(--accent); }
+.tl-toggle:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.tl-chev { color: var(--muted); font-size: 11px; transition: transform var(--t) var(--ease); }
+.tl.is-collapsed .tl-chev { transform: rotate(-90deg); }
+.tl.is-collapsed > .tl-list { display: none; }
+.ov-work > .task-card .tl.is-collapsed { flex: none; min-height: 0; }
+.tl-help { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tl-filter[hidden] { display: none; }
+/* 今天跑过的任务（空闲时） */
+.today-head { margin-bottom: 2px; }
+.tlane.is-done.is-bad::before { background: var(--bad); opacity: .8; }
+.tlane.is-done > .tlane-clock { flex: none; color: var(--muted); font-size: var(--fs-sm); }

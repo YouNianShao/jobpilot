@@ -20,8 +20,8 @@ def test_registry_has_all_four_platforms():
     assert set(registry.keys()) == {"boss", "51job", "liepin", "zhaopin"}
     for key in registry.keys():
         assert registry.supports(key, "collect") is True
-        # BOSS 2026-10-10、猎聘 / 前程无忧 2026-10-14 实机核验通过；智联仍只有采集（验证码）
-        expected_apply = key in ("boss", "liepin", "51job")
+        # BOSS 2026-10-10、猎聘 / 前程无忧 2026-10-14、智联 2026-10-16 实机核验通过
+        expected_apply = True
         assert registry.supports(key, "apply") is expected_apply
 
 

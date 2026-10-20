@@ -46,6 +46,7 @@ def make_ctx(tmp_path, rows=None, jobs=()):
     repo = Repo(connect(tmp_path / "m.db"))
     for job in jobs:
         repo.upsert_job(job)
+        repo.set_status(job.id, job.status)        # upsert 不一定照搬状态：这里明确写进去
     payload = json.dumps(rows if rows is not None else ROWS, ensure_ascii=False)
     page = FakePage(url=CHAT_URL, selector_text={CHAT_ROW: ""}, evals={CHAT_ROW: payload})
     browser = FakeBrowser([page])
@@ -81,7 +82,7 @@ def test_monitor_never_clicks_into_a_conversation(tmp_path):
 
 def test_monitor_writes_progress_and_matches_job_by_company(tmp_path):
     job = Job(id="boss-43f0", platform="boss", external_id="43f0",
-              title="数据分析师", company="润和软件",
+              title="数据分析师", company="润和软件", status="applied",   # 监测只拿 BOSS 上投出去了的岗位
               url="https://www.zhipin.com/job_detail/43f0.html")
     ctx, page, repo = make_ctx(tmp_path, jobs=[job])
 
@@ -112,3 +113,78 @@ def test_monitor_does_not_move_a_line_backwards(tmp_path):
 
     row = [r for r in repo.list_interactions() if r["hr_name"] == "齐女士"][0]
     assert row["state"] == "interview"
+
+
+def _job(job_id, company, *, platform="boss", status="applied"):
+    return Job(id=job_id, platform=platform, external_id=job_id, title="数据分析师",
+               company=company, status=status)
+
+
+def test_matching_only_uses_boss_jobs_that_were_applied(tmp_path):
+    """同名公司在别的平台 / 还没投的岗位不算：以前全库按公司名比，一撞名就对不上（2026-10-20）。"""
+    jobs = [
+        _job("boss-1", "润和软件"),
+        _job("51job-1", "润和软件", platform="51job"),     # 别的平台
+        _job("boss-2", "润和软件", status="new"),          # BOSS 上还没投
+    ]
+    ctx, _, repo = make_ctx(tmp_path, jobs=jobs)
+    BossDriver().monitor(ctx)
+    row = [r for r in repo.list_interactions() if r["hr_name"] == "苗女士"][0]
+    assert row["job_id"] == "boss-1"
+
+
+def test_two_applied_boss_jobs_at_same_company_stay_unmatched(tmp_path):
+    jobs = [_job("boss-1", "Cognizant"), _job("boss-2", "Cognizant", status="already")]
+    ctx, _, repo = make_ctx(tmp_path, jobs=jobs)
+    BossDriver().monitor(ctx)
+    row = [r for r in repo.list_interactions() if r["hr_name"] == "齐女士"][0]
+    assert row["job_id"] is None
+    assert repo.list_events("boss-1") == [] and repo.list_events("boss-2") == []
+
+
+def test_reply_writes_hr_reply_event_once_so_follow_up_stops(tmp_path):
+    from jobpilot.bootstrap import build_context
+    from jobpilot.services.followup import classify
+
+    ctx, _, repo = make_ctx(tmp_path, jobs=[_job("boss-1", "Cognizant")])
+    repo.add_event("boss-1", "applied", "applied")
+    BossDriver().monitor(ctx)
+    assert [e["kind"] for e in repo.list_events("boss-1")].count("hr_reply") == 1
+
+    # 同样的列表再看一次：状态没往前走，不再记事件
+    ctx2, _, _ = make_ctx(tmp_path)
+    BossDriver().monitor(ctx2)
+    assert [e["kind"] for e in repo.list_events("boss-1")].count("hr_reply") == 1
+
+    service = build_context(AppConfig(), repo=repo)
+    assert classify(service, repo.get_job("boss-1"))["state"] == "answered"
+
+
+def test_new_message_updates_text_and_unread_but_keeps_higher_state(tmp_path):
+    rows = [{"name": "齐女士", "company": "Cognizant", "last": "没看到Databricks的经验",
+             "status": "", "time": "昨天", "unread": ""}]
+    ctx, _, repo = make_ctx(tmp_path, rows=rows)
+    BossDriver().monitor(ctx)
+    key = "auto:boss:齐女士|Cognizant"
+    # 人工改成了「约面试」
+    repo.upsert_interaction(key=key, platform="boss", job_id=None, hr_name="齐女士",
+                            state="interview", last_text="没看到Databricks的经验", deeplink="")
+    first = repo.get_interaction(key)
+
+    rows2 = [{**rows[0], "last": "那你方便周三来聊聊吗", "time": "10:21", "unread": "1"}]
+    ctx2, _, _ = make_ctx(tmp_path, rows=rows2)
+    result = BossDriver().monitor(ctx2)
+
+    row = repo.get_interaction(key)
+    assert row["state"] == "interview"              # 不往回退
+    assert row["last_text"] == "那你方便周三来聊聊吗"   # 但新消息写进来了
+    assert row["unread"] == 1 and row["msg_time"] == "10:21"
+    assert row["updated_at"] >= first["updated_at"]
+    assert result.events == {}                       # 状态没变 = 不算一条进展
+
+
+def test_unread_badge_parsing():
+    from jobpilot.platforms.boss import unread_of
+
+    assert unread_of({"unread": "3"}) and unread_of({"unread": "99+"})
+    assert not unread_of({"unread": ""}) and not unread_of({"unread": "0"}) and not unread_of({})

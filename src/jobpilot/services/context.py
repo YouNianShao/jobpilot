@@ -23,6 +23,14 @@ def _noop_progress(current: int, total: int, label: str) -> None:
     pass
 
 
+def _noop_stage(_: str) -> None:
+    pass
+
+
+def _noop_lane(_platform: str, _info: dict) -> None:
+    pass
+
+
 @dataclass
 class ServiceContext:
     config: AppConfig
@@ -32,6 +40,10 @@ class ServiceContext:
     stop: StopSignal = field(default_factory=StopSignal)
     log: Callable[[str], None] = _noop_log
     progress: Callable[[int, int, str], None] = _noop_progress
+    # 全流程走到哪一步了（collect / score / greet / apply），任务监控台的步骤条用
+    stage: Callable[[str], None] = _noop_stage
+    # 所有平台轮流投递时，每个平台各自的进度（任务监控台拆成四条小进度条用）
+    lane: Callable[[str, dict], None] = _noop_lane
     # 测试注入假浏览器用；None 表示用真实的 patchright
     browser_factory: Callable[[], Any] | None = None
 
@@ -58,10 +70,28 @@ class ServiceContext:
 
     def create_browser(self):
         if self.browser_factory is not None:
-            return self.browser_factory()
-        from ..browser import create_browser
+            browser = self.browser_factory()
+        else:
+            from ..browser import create_browser
 
-        return create_browser(self.config.browser.cdp_url)
+            browser = create_browser(self.config.browser.cdp_url)
+        # 记下这个任务开过的浏览器连接：「停止」时如果任务卡在一句不返回的页面调用里，靠它强制断开
+        self.__dict__.setdefault("_browsers", []).append(browser)
+        # 任务等待（间隔 / 拟人停留 / 冷却）时让这个连接继续处理浏览器消息，见 StopSignal.sleep
+        pump = getattr(browser, "pump", None)
+        if pump is not None and hasattr(self.stop, "add_pump"):
+            self.stop.add_pump(pump)
+        return browser
+
+    def kill_browsers(self) -> int:
+        """强制断开这个任务的所有浏览器驱动（不碰 Chrome）；返回断开了几个。"""
+        killed = 0
+        for browser in self.__dict__.get("_browsers", []):
+            kill = getattr(browser, "kill_driver", None)
+            if kill is not None:
+                kill()
+                killed += 1
+        return killed
 
     def driver_context(self, browser, platform: str) -> DriverContext:
         return DriverContext(

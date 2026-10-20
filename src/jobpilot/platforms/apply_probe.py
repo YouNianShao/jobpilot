@@ -10,7 +10,9 @@ BOSS 的自动投递就是这么开起来的：先在真实岗位页上「看」
 
 from __future__ import annotations
 
+from ..browser import humanize
 from ..models import Job
+from ..safety.attention import release_page, tag_page
 from ..safety.risk import classify_risk
 from .base import DriverContext
 
@@ -148,7 +150,8 @@ JS_RESUME_CONFIRM = r"""
 """
 
 # 一键投递之后的结果文字（2026-10-13 起按真机结果补充）
-AFTER_SUCCESS = ("投递成功", "申请成功", "已投递", "已申请", "简历已投递", "投递简历成功")
+# 「已向对方发送简历」：智联点「立即投递」后的提示（2026-10-16 实测）
+AFTER_SUCCESS = ("投递成功", "申请成功", "已投递", "已申请", "简历已投递", "投递简历成功", "已向对方发送简历")
 AFTER_NEED_RESUME = ("请选择", "选择简历", "完善简历", "上传简历", "创建简历", "附件简历", "选择城市", "求职意向")
 AFTER_LIMIT = ("今日投递", "次数已达", "上限", "频繁", "稍后再试")
 
@@ -173,7 +176,7 @@ def click_apply(ctx: DriverContext, job: Job, *, platform: str, ready_selector: 
     ctx.reserve("apply")                              # 投递有自己的页面额度，和采集分开计
     page = ctx.browser.open(job.url)
     try:
-        page.wait_for(ready_selector, timeout_ms=15000)
+        page.wait_for(ready_selector, timeout_ms=30000)
         script = "(" + JS_PROBE + ")(" + json.dumps(LABELS, ensure_ascii=False) + ")"
         data = page.eval(script) or {}
         if data.get("loginLink") and not data.get("loginModal"):
@@ -181,15 +184,17 @@ def click_apply(ctx: DriverContext, job: Job, *, platform: str, ready_selector: 
             data = page.eval(script) or data
         risk = classify_risk(page.text(), page.url)
         if risk == "login_required" or data.get("loginModal") or data.get("loginLink"):
-            raise LoginRequired(f"{label}需要登录：请在调试 Chrome 里重新登录{label}")
+            raise tag_page(LoginRequired(f"{label}需要登录：请在调试 Chrome 里重新登录{label}"), page)
         if risk:
-            raise PlatformRisk(risk, f"{label}岗位页出现风控信号")
+            raise tag_page(PlatformRisk(risk, f"{label}岗位页出现风控信号"), page)
         if data.get("already"):
             return "already", f"页面显示「{data['already'][0]['text']}」"
         buttons = [b for b in (data.get("apply") or []) if not b.get("disabled")]
         if not buttons:
             return "unsupported", "页面上没有可点的投递按钮（岗位可能已下线，或只能聊天）"
         target = buttons[0]["text"]
+        # 人会先读一眼岗位再点投递：只停留 / 滚动 / 挪鼠标，不加任何点击
+        humanize.before_apply(ctx, page)
         if not page.eval("(" + JS_CLICK + ")(" + json.dumps(target, ensure_ascii=False) + ")"):
             return "unsupported", f"找到了「{target}」但点不到（页面可能刚变化）"
         ctx.log(f"[{platform}] 已点「{target}」，等结果…")
@@ -215,16 +220,13 @@ def click_apply(ctx: DriverContext, job: Job, *, platform: str, ready_selector: 
                 raise PlatformRisk("rate_limit", f"{label}提示投递受限：{text[:40]}")
             later_risk = classify_risk(page.text(), page.url)
             if later_risk and later_risk != "login_required":
-                raise PlatformRisk(later_risk, f"{label}点投递后出现风控信号")
+                raise tag_page(PlatformRisk(later_risk, f"{label}点投递后出现风控信号"), page)
         popup = " / ".join(after.get("popups") or [])[:60]
         what = f"「{target}」" + (f"和简历弹窗里的投递（{resume_used}）" if resume_used else "")
         return "failed", (f"点了{what}但看不出结果，没有再点第二次，请到平台上核对"
                           + (f"（页面提示：{popup}）" if popup else ""))
     finally:
-        try:
-            page.close()
-        except Exception:  # noqa: BLE001
-            pass
+        release_page(page)   # 验证 / 掉登录的那一页留给你处理
 
 
 def probe(ctx: DriverContext, job: Job, *, platform: str, ready_selector: str, label: str) -> dict:
@@ -236,7 +238,7 @@ def probe(ctx: DriverContext, job: Job, *, platform: str, ready_selector: str, l
     ctx.reserve("collect_detail")                 # 和采集详情页同一条额度、同一道风控闸门
     page = ctx.browser.open(job.url)
     try:
-        page.wait_for(ready_selector, timeout_ms=15000)   # 等不到也继续：没内容本身就是要报告的结果
+        page.wait_for(ready_selector, timeout_ms=30000)   # 等不到也继续：没内容本身就是要报告的结果
         import json
 
         script = "(" + JS_PROBE + ")(" + json.dumps(LABELS, ensure_ascii=False) + ")"
@@ -247,10 +249,7 @@ def probe(ctx: DriverContext, job: Job, *, platform: str, ready_selector: str, l
             data = page.eval(script) or data
         risk = classify_risk(page.text(), page.url)
     finally:
-        try:
-            page.close()
-        except Exception:  # noqa: BLE001
-            pass
+        release_page(page)   # 验证 / 掉登录的那一页留给你处理
 
     apply_btns, already, chat = data.get("apply") or [], data.get("already") or [], data.get("chat") or []
     # 没登录时页面上会有「验证码登录 / 获取验证码」：这是登录表单，不是平台弹出来的人机验证。

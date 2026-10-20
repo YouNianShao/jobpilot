@@ -8,6 +8,7 @@
    这里改的关键词 / 城市 / 页数**只用这一次**，不改配置页里的长期设置。 */
 
 import { get } from '../api.js';
+import { platformName } from '../common.js';
 import { clear, el, icon } from '../ui.js';
 
 const ORDER = ['boss', '51job', 'liepin', 'zhaopin'];
@@ -69,7 +70,9 @@ function toggle(on, label, onChange) {
 function platformRow(key, info, cfg, catalog, { preselect, onChange }) {
   const canApply = (info.capabilities || []).includes('apply') && cfg.apply !== false;
   const locked = info.locked;
-  let on = preselect && cfg.enabled !== false;
+  // 这个平台已经有任务在跑（同一平台一次只能跑一个）：置灰、不能勾，等它结束再来
+  const busy = !!info.busy;
+  let on = preselect && cfg.enabled !== false && !busy;
   const kw = chipEditor(cfg.keywords, { placeholder: '输入关键词，回车添加', label: info.name + ' 关键词' });
   const city = chipEditor(cfg.cities, { placeholder: '输入城市，回车添加', label: info.name + ' 城市', catalog });
   const pages = el('input', { type: 'number', min: '1', max: '20', value: String(cfg.max_pages || 3), 'aria-label': info.name + ' 每组页数' });
@@ -83,18 +86,19 @@ function platformRow(key, info, cfg, catalog, { preselect, onChange }) {
   const badges = el('span', { class: 'fs-badges' }, [
     el('span', { class: 'pill ' + (canApply ? 'ok' : ''), text: canApply ? '可自动投递' : '只采集、评分' }),
     locked ? el('span', { class: 'pill warn', text: '风控暂停中' }) : null,
+    busy ? el('span', { class: 'pill live', text: '正在跑任务' }) : null,
   ]);
   const paint = () => {
     const k = kw.read(); const c = city.read();
     summary.textContent = on
       ? (k.join('、') || '没填关键词') + ' · ' + (c.join('、') || '没填城市') + ' · 每组 ' + (pages.value || 3) + ' 页'
-      : (cfg.enabled === false ? '在配置里是停用的' : '这一轮不跑');
+      : (busy ? '正在跑任务，等它结束才能再选' : (cfg.enabled === false ? '在配置里是停用的' : '这一轮不跑'));
     node.classList.toggle('is-on', on);
     editor.hidden = !on;
   };
   const sw = toggle(on, '这一轮跑' + info.name, (next) => { on = next; paint(); onChange(); });
-  if (cfg.enabled === false) sw.disabled = true;
-  const node = el('div', { class: 'fs-row' }, [
+  if (cfg.enabled === false || busy) sw.disabled = true;
+  const node = el('div', { class: 'fs-row' + (busy ? ' is-busy' : '') }, [
     el('div', { class: 'fs-row-head' }, [sw, el('div', { class: 'fs-name' }, [el('b', { text: info.name }), summary]), badges]),
     editor,
   ]);
@@ -120,6 +124,7 @@ export async function openFlowSheet({ status, config, preselect, start }) {
   const keys = ORDER.filter((k) => platforms[k]).concat(Object.keys(platforms).filter((k) => !ORDER.includes(k)));
   const catalogs = await Promise.all(keys.map((k) => get('/api/cities?platform=' + encodeURIComponent(k))));
   const approved = (status && status.approved_by_platform) || {};
+  const busy = new Set((status && status.busy_platforms) || []);
 
   const backdrop = el('div', { class: 'fs-backdrop' });
   const steps = el('ol', { class: 'fs-steps' });
@@ -136,8 +141,8 @@ export async function openFlowSheet({ status, config, preselect, start }) {
     const waiting = applicable.reduce((n, r) => n + (approved[r.key] || 0), 0);
     clear(steps);
     const step = (title, text) => steps.appendChild(el('li', {}, [el('b', { text: title }), el('span', { text })]));
-    step('采集', names.length ? '依次采集 ' + names.join(' → ') + '（一个平台采完再采下一个，不同时开）' : '还没选平台');
-    step('评分 · 写招呼语', '所有平台里还没评分的新岗位一起处理');
+    step('采集', names.length ? names.join('、') + ' 同时开始，每个平台一个独立任务（各自的间隔 / 额度 / 风控照旧）' : '还没选平台');
+    step('评分 · 写招呼语', '每个平台评自己的新岗位；某个平台出问题只停它自己，其它平台继续');
     step('等你确认', '评分过线的岗位停在「待确认」，你确认之后才会投递');
     applyNote.textContent = !applyAfter ? '这一轮不投递：停在评分之后。'
       : applicable.length
@@ -149,7 +154,7 @@ export async function openFlowSheet({ status, config, preselect, start }) {
   };
   keys.forEach((key, i) => {
     const cfg = (config && config.platforms && config.platforms[key]) || {};
-    const info = { ...platforms[key], locked: !!((status && status.locks) || {})[key] };
+    const info = { ...platforms[key], locked: !!((status && status.locks) || {})[key], busy: busy.has(key) };
     const cat = catalogs[i] && !catalogs[i].error ? catalogs[i] : null;
     rows.push(platformRow(key, info, cfg, cat, { preselect: preselect.includes(key), onChange: refreshPlan }));
   });
@@ -185,10 +190,20 @@ export async function openFlowSheet({ status, config, preselect, start }) {
     if (problem) { err.hidden = false; err.textContent = problem; return; }
     err.hidden = true;
     okBtn.disabled = true;
-    const res = await start({ mode: 'full', plans: rows.map((r) => r.plan()).filter(Boolean), apply_after: applyAfter });
+    // 每个平台一个独立的全流程任务，同时开始（2026-10-19 用户要求：已经能并行，就别串行等）。
+    // 某个平台没能开始（例如刚好在跑别的任务），只报它，其它平台照常开
+    const plans = rows.map((r) => r.plan()).filter(Boolean);
+    const body = (plan) => ({ mode: 'full', plans: [plan], apply_after: applyAfter });
+    const results = await Promise.all(plans.map((plan) => start(body(plan))));
     okBtn.disabled = false;
-    if (res && res.error) { err.hidden = false; err.textContent = res.error; return; }
-    close(true);
+    const failed = results.map((res, i) => [plans[i], res]).filter(([, res]) => res && res.error);
+    if (failed.length === plans.length) {          // 一个都没开成：面板留着，写清原因
+      err.hidden = false;
+      err.textContent = failed.map(([p, r]) => platformName(p.platform) + '：' + r.error).join('；');
+      return;
+    }
+    // 部分平台没开成：其它平台已经在跑，关掉面板，把没开成的原因交给调用方提示
+    close({ started: plans.length - failed.length, failed: failed.map(([p, r]) => platformName(p.platform) + '：' + r.error) });
   });
   refreshPlan();
   document.body.append(backdrop, sheet);

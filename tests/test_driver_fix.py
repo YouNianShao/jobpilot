@@ -184,7 +184,10 @@ def test_liepin_is_paced_like_bosshunter_even_for_old_saved_configs():
     assert AppConfig().platforms["liepin"].max_pages == 1
 
 
+@pytest.mark.humanize
 def test_liepin_reads_the_jd_page_before_leaving(monkeypatch):
+    """读到 JD 后走共用的拟人停留（browser/humanize.py）：滚动几下、停留时长在配置区间内。"""
+    from jobpilot.config import AppConfig
     from jobpilot.platforms.liepin import LiepinDriver
 
     calls, slept = [], []
@@ -208,6 +211,7 @@ def test_liepin_reads_the_jd_page_before_leaving(monkeypatch):
 
     class Ctx:
         stop = Stop()
+        config = AppConfig()
 
         def reserve(self, stage):
             pass
@@ -216,5 +220,159 @@ def test_liepin_reads_the_jd_page_before_leaving(monkeypatch):
             pass
 
     text, _ = LiepinDriver()._fetch_jd(Ctx(), Page(), "https://www.liepin.com/job/1.shtml")
-    assert text.startswith("岗位职责") and any("scrollBy" in c for c in calls)
-    assert slept and 2.0 <= slept[-1] <= 4.5
+    # 这个假页面没有滚轮方法：退回脚本滚动，至少滚两下
+    assert text.startswith("岗位职责") and sum("scrollBy" in c for c in calls) >= 2
+    cfg = Ctx.config.safety.humanize
+    assert cfg.detail_read_min_seconds - 1e-6 <= sum(slept) <= cfg.detail_read_max_seconds + 1e-6
+
+
+def test_watchdog_turns_a_hung_call_into_pagehung(monkeypatch):
+    """页面整页卡死时 evaluate 永远不返回：看门狗到点强制断开驱动，这一句以 PageHung 返回。"""
+    import threading
+
+    monkeypatch.setattr(drv, "CALL_TIMEOUT_S", 0.3)
+    browser = drv.PatchrightBrowser("http://127.0.0.1:9")
+    released = threading.Event()
+    monkeypatch.setattr(browser, "kill_driver", lambda: (setattr(browser, "_killed", True), released.set()))
+
+    def hangs():
+        released.wait(5)
+        raise Exception("Connection closed")
+
+    with pytest.raises(drv.PageHung):
+        browser.guarded(hangs)
+    assert released.is_set()
+
+
+def test_fast_calls_are_untouched(monkeypatch):
+    monkeypatch.setattr(drv, "CALL_TIMEOUT_S", 5)
+    browser = drv.PatchrightBrowser("http://127.0.0.1:9")
+    assert browser.guarded(lambda: 42) == 42
+    with pytest.raises(ValueError):
+        browser.guarded(lambda: (_ for _ in ()).throw(ValueError("普通错误照常抛")))
+
+
+def test_stop_force_kills_a_task_stuck_in_a_page_call(monkeypatch):
+    """点了停止 8 秒后任务还在跑：强制断开它的浏览器驱动。"""
+    import threading
+    import time
+
+    import jobpilot.tasks as tasks_mod
+    from jobpilot.platforms.base import StopSignal
+
+    killed = threading.Event()
+
+    class Ctx:
+        def __init__(self):
+            from jobpilot.config import AppConfig
+
+            self.stop = StopSignal()
+            self.config = AppConfig()
+
+            class R:
+                class conn:
+                    @staticmethod
+                    def close():
+                        pass
+
+                def upsert_task_run(self, row):
+                    pass
+
+            self.repo = R()
+
+        def kill_browsers(self):
+            killed.set()
+            return 1
+
+    def flow(ctx, mode, platform, **o):
+        killed.wait(5)                                  # 模拟卡在一句不返回的页面调用里
+        raise RuntimeError("Connection closed")
+
+    monkeypatch.setattr(tasks_mod, "run_flow", flow)
+    monkeypatch.setattr(tasks_mod, "check_mode", lambda *a, **k: None)
+    monkeypatch.setattr(tasks_mod.TaskRunner, "STOP_GRACE_S", 0.2)
+    runner = tasks_mod.TaskRunner(lambda: Ctx())
+    task = runner.start("confirm", "")
+    runner.stop(task.id)
+    for _ in range(60):
+        if task.status != "running":
+            break
+        time.sleep(0.05)
+    assert killed.is_set() and task.status == "stopped"
+    assert any("强制断开" in line for line in task.logs)
+
+
+def test_zhaopin_list_reads_the_job_number_from_each_card():
+    """滚动加载的批次不在页面 HTML 里：编号要从卡片自己的数据（Vue 组件的 job.number）拿。"""
+    from jobpilot.platforms.zhaopin import JS_LIST
+
+    assert "__vue__" in JS_LIST and "job.number" in JS_LIST
+
+
+def test_stop_sleep_keeps_the_browser_connection_pumping():
+    """任务等待时要让浏览器连接继续收发消息（否则新开的标签页一直转圈，2026-10-16 真机）。"""
+    import time
+
+    from jobpilot.platforms.base import StopSignal
+
+    pumped = []
+
+    def pump(seconds):
+        pumped.append(seconds)
+        time.sleep(seconds)
+        return True
+
+    stop = StopSignal()
+    stop.add_pump(pump)
+    t0 = time.time()
+    stop.sleep(1.2)
+    assert pumped and abs(sum(pumped) - 1.2) < 0.3 and time.time() - t0 < 2.0
+
+
+def test_dead_pump_falls_back_to_plain_sleep():
+    import time
+
+    from jobpilot.platforms.base import StopSignal
+
+    def broken(seconds):
+        raise RuntimeError("Connection closed")
+
+    stop = StopSignal()
+    stop.add_pump(broken)
+    t0 = time.time()
+    stop.sleep(0.6)
+    assert 0.5 < time.time() - t0 < 1.5 and not stop.__dict__["_pumps"]
+
+
+def test_create_browser_registers_its_pump():
+    from jobpilot.config import AppConfig
+    from jobpilot.platforms.base import StopSignal
+    from jobpilot.services.context import ServiceContext
+
+    class B:
+        def pump(self, s):
+            return True
+
+    ctx = ServiceContext(config=AppConfig(), repo=None, llm=None, policy=None, stop=StopSignal(), browser_factory=B)
+    ctx.create_browser()
+    assert len(ctx.stop.__dict__["_pumps"]) == 1
+
+
+def test_paused_task_keeps_pumping_and_stop_still_works():
+    import threading
+    import time
+
+    from jobpilot.platforms.base import StopRequested, StopSignal
+
+    pumped = []
+    stop = StopSignal()
+    stop.add_pump(lambda s: (pumped.append(s), time.sleep(s), True)[-1])
+    stop.pause()
+    threading.Timer(1.2, stop.request).start()
+    t0 = time.time()
+    try:
+        stop.check()
+        raise AssertionError("应该被停止")
+    except StopRequested:
+        pass
+    assert len(pumped) >= 2 and time.time() - t0 < 2.5

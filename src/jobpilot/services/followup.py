@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..ai.prompting import render, version
 from ..models import Status
@@ -37,29 +37,66 @@ def _read_resume(ctx: ServiceContext) -> str:
     return text
 
 
+# 记过这些进展就说明 HR 已经有动静，不该再发跟进；「已查看」不算回复，照常跟进
+_ANSWERED_STATES = frozenset({"replied", "interview", "interviewed", "offer", "rejected"})
+
+
+def classify(ctx: ServiceContext, job, now: datetime | None = None) -> dict:
+    """一个已投递岗位在跟进队列里的位置：due / waiting / answered / done / unknown。
+
+    界面要用它解释"为什么这个岗位还没到跟进"，所以除了结论还带上投递时间和到期时间。
+    """
+    cfg = ctx.config.follow_up
+    now = now or datetime.now()
+    applied_at = _parse(ctx.repo.last_event_at(job.id, "applied"))
+    info = {"applied_at": applied_at.strftime(_TS) if applied_at else None, "due_at": None}
+    if applied_at is None:
+        # 没有投递事件（比如旧数据直接改的状态）就算不出到期时间
+        return {**info, "state": "unknown"}
+    # 有回复就不再跟进：手动「记录进展」写的是 interactions 表，不是 replied 事件，两边都要看
+    answered = (ctx.repo.count_events_for_job(job.id, "replied")
+                or ctx.repo.count_events_for_job(job.id, "hr_reply")
+                or ctx.repo.job_interaction_states(job.id) & _ANSWERED_STATES)
+    if answered:
+        return {**info, "state": "answered"}
+    if ctx.repo.count_events_for_job(job.id, "follow_up") >= cfg.max_times:
+        return {**info, "state": "done"}
+    due_at = applied_at + timedelta(hours=cfg.after_hours)
+    last = _parse(job.follow_up_at)
+    if last is not None:
+        due_at = max(due_at, last + timedelta(hours=cfg.min_gap_hours))
+    info["due_at"] = due_at.strftime(_TS)
+    return {**info, "state": "due" if now >= due_at else "waiting"}
+
+
 def find_due(ctx: ServiceContext, *, limit: int = 20) -> list:
     """找出"该跟进但还没跟进"的岗位。"""
-    cfg = ctx.config.follow_up
-    if not cfg.enabled:
+    if not ctx.config.follow_up.enabled:
         return []
     now = datetime.now()
-    due = []
-    for job in ctx.repo.list_jobs(status=Status.APPLIED.value, limit=500):
-        applied_at = _parse(ctx.repo.last_event_at(job.id, "applied"))
-        if applied_at is None:
-            continue
-        if (now - applied_at).total_seconds() < cfg.after_hours * 3600:
-            continue
-        # 有回复就不再跟进
-        if ctx.repo.count_events_for_job(job.id, "replied") or ctx.repo.count_events_for_job(job.id, "hr_reply"):
-            continue
-        if ctx.repo.count_events_for_job(job.id, "follow_up") >= cfg.max_times:
-            continue
-        last = _parse(job.follow_up_at)
-        if last is not None and (now - last).total_seconds() < cfg.min_gap_hours * 3600:
-            continue
-        due.append(job)
+    due = [job for job in ctx.repo.list_jobs(status=Status.APPLIED.value, limit=500)
+           if classify(ctx, job, now)["state"] == "due"]
     return due[:limit]
+
+
+def follow_up_queue(ctx: ServiceContext) -> dict:
+    """监测页「待跟进」卡片的数据：全部已投递岗位 + 各自的跟进状态。
+
+    以前接口只返回"已到期或已生成话术"的岗位，刚投完的 48 小时内列表是空的，
+    界面就误报"还没有已投递的岗位"。
+    """
+    cfg = ctx.config.follow_up
+    now = datetime.now()
+    rows = []
+    for job in ctx.repo.list_jobs(status=Status.APPLIED.value, limit=500):
+        info = classify(ctx, job, now)
+        if not cfg.enabled and info["state"] in ("due", "waiting"):
+            info = {**info, "state": "disabled", "due_at": None}
+        rows.append({**job.__dict__, **info, "due": info["state"] == "due"})
+    # 到期的排前面，其余按到期时间、投递时间排
+    order = {"due": 0, "waiting": 1}
+    rows.sort(key=lambda r: (order.get(r["state"], 2), r["due_at"] or "9", r["applied_at"] or ""))
+    return {"enabled": cfg.enabled, "after_hours": cfg.after_hours, "rows": rows}
 
 
 def generate_follow_ups(ctx: ServiceContext, *, limit: int = 10) -> dict:

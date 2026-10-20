@@ -129,6 +129,10 @@ class CollectResult:
     failed: int = 0
     skipped: int = 0        # 因为"刚采过"而跳过的 城市+关键词 数量
     stopped: str = ""
+    early_stopped: int = 0  # 连续几页没有新岗位、提前结束的 关键词×城市 组合数
+    pages_saved: int = 0    # 因提前结束 / 按上次深度封顶而少翻的页数
+    # 每个组合一条：{slot, label, seen, new, pages}（看哪个组合几乎采不到新岗位）
+    slots: list[dict] = field(default_factory=list)
 
 
 @dataclass

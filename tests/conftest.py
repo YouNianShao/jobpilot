@@ -40,6 +40,23 @@ def _never_touch_real_data(tmp_path_factory, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_human_dwell(request, monkeypatch):
+    """拟人停留默认关掉：很多测试用真的 StopSignal，详情页每页读 4~14 秒会让整套测试慢到不能跑。
+
+    专门测拟人的用例加 ``@pytest.mark.humanize`` 就会照配置走。
+    """
+    if request.node.get_closest_marker("humanize"):
+        return
+    import jobpilot.browser.humanize as humanize
+
+    monkeypatch.setattr(humanize, "_cfg", lambda ctx: None)
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "humanize: 不关闭拟人停留（测 browser/humanize.py 用）")
+
+
 _REAL_FILES: dict = {}
 
 

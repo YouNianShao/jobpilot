@@ -216,7 +216,7 @@ def test_capabilities_only_declare_verified_actions(tmp_path):
     """capabilities 就是「实机跑通过什么」的清单，多写一个都算撒谎。
     采集 / 投递 2026-10-10 核验；聊天监测 2026-10-11 核验（只读列表）。"""
     driver = BossDriver()
-    assert driver.capabilities == frozenset({"collect", "apply"})
+    assert driver.capabilities == frozenset({"collect", "apply", "monitor"})
     ctx = make_ctx(tmp_path, FakeBrowser([]))
     assert driver.apply(ctx, None).status == "unsupported"
 

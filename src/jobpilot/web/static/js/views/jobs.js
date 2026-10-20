@@ -9,9 +9,13 @@
 
 import { get, post } from '../api.js';
 import { FILTERS, PLATFORM_NAME, STATUS_LABEL, isApplied, openJobUrl, platformName } from '../common.js';
-import { clear, confirmDialog, el, empty, renderPager as sharedPager, skeletonRows, toast } from '../ui.js';
+import {
+  clear, confirmDialog, el, empty, loadPageSize, pageSizeSelect, renderPager as sharedPager, savePageSize,
+  skeletonRows, toast,
+} from '../ui.js';
 
-const PAGE_SIZE = 50;
+// 默认一页 20 条：以前固定 50 条，要往下滚很远才看得到翻页条
+const PAGE_SIZES = [20, 50, 100];
 const COLS = 9;
 const $ = (id) => document.getElementById(id);
 
@@ -24,6 +28,7 @@ const pool = {
   hideNature: false,     // 只看正常岗（排除外包 / 培训 / 营销话术）
   bin: false,            // 回收站
   page: 1,
+  size: loadPageSize('jobs', PAGE_SIZES, PAGE_SIZES[0]),   // 每页几条（记在浏览器里）
   data: null,            // 最近一次接口返回 {items, total, page, pages, limit, counts}
   selected: new Set(),   // 勾选的岗位 id：翻页 / 筛选都保留
   seq: 0,                // 请求序号：用户连续操作时，只认最后一次的结果
@@ -39,6 +44,9 @@ export function initJobs(context) {
     clearTimeout(pool.timer);
     pool.timer = setTimeout(() => { pool.page = 1; loadJobs(); }, 250);   // 停手 0.25 秒再搜
   });
+  // 工具栏上也放一个「每页 N 条」：不用先滚到底部的翻页条才能改
+  const sizeSlot = $('jobPageSize');
+  if (sizeSlot) sizeSlot.appendChild(pageSizeSelect(PAGE_SIZES, pool.size, setPageSize));
   $('btnBin').addEventListener('click', () => toggleBin());
   $('btnBadNature').addEventListener('click', () => {
     pool.hideNature = !pool.hideNature;
@@ -85,7 +93,7 @@ export async function loadJobs(options) {
     clear($('jobs'));
     for (const row of skeletonRows(6, COLS)) $('jobs').appendChild(row);
   }
-  const params = new URLSearchParams({ page: String(pool.page), limit: String(PAGE_SIZE), sort: pool.sort, dir: pool.dir });
+  const params = new URLSearchParams({ page: String(pool.page), limit: String(pool.size), sort: pool.sort, dir: pool.dir });
   if (pool.query.trim()) params.set('q', pool.query.trim());
   if (pool.bin) params.set('deleted', '1');
   else {
@@ -197,14 +205,32 @@ function renderStats() {
   }
 }
 
+function scrollToCard() {
+  const card = document.querySelector('.view[data-view="jobs"] .card');
+  if (card && card.getBoundingClientRect().top < 0) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+/* 换每页条数：停在"原来这页第一条"所在的那一页，而不是一律跳回第 1 页 */
+export function setPageSize(size) {
+  if (!PAGE_SIZES.includes(size) || size === pool.size) return;
+  const first = (pool.page - 1) * pool.size;
+  pool.size = size;
+  pool.page = Math.floor(first / size) + 1;
+  savePageSize('jobs', size);
+  const slot = $('jobPageSize');
+  const select = slot && slot.querySelector('select');
+  if (select) select.value = String(size);      // 工具栏和翻页条两个下拉保持一致
+  loadJobs();
+  scrollToCard();
+}
+
 function renderPager() {
   const data = pool.data;
   sharedPager($('jobPager'), data && { page: data.page, pages: data.pages, total: data.total, limit: data.limit }, (page) => {
     pool.page = page;
     loadJobs();
-    const card = document.querySelector('.view[data-view="jobs"] .card');
-    if (card && card.getBoundingClientRect().top < 0) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  });
+    scrollToCard();
+  }, { options: PAGE_SIZES, onChange: setPageSize });
 }
 
 function renderRows() {

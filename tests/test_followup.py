@@ -106,3 +106,70 @@ def test_min_gap_blocks_second_followup(tmp_path):
     ctx.repo.conn.execute("UPDATE jobs SET follow_up_at = ? WHERE id = ?", (past, "boss-1"))
     ctx.repo.conn.commit()
     assert [job.id for job in find_due(ctx)] == ["boss-1"]
+
+
+def test_queue_lists_applied_jobs_before_threshold(tmp_path):
+    # 刚投完、还没到跟进时间的岗位也要列出来，否则界面误报"还没有已投递的岗位"
+    from jobpilot.services.followup import follow_up_queue
+
+    ctx = make_ctx(tmp_path, applied_hours_ago=1)
+    data = follow_up_queue(ctx)
+    assert data["after_hours"] == 48
+    [row] = data["rows"]
+    assert row["id"] == "boss-1"
+    assert row["state"] == "waiting" and row["due"] is False
+    assert row["applied_at"] and row["due_at"] > row["applied_at"]
+
+
+def test_queue_marks_due(tmp_path):
+    from jobpilot.services.followup import follow_up_queue
+
+    ctx = make_ctx(tmp_path, applied_hours_ago=72)
+    [row] = follow_up_queue(ctx)["rows"]
+    assert row["state"] == "due" and row["due"] is True
+
+
+def test_manual_progress_reply_removes_from_queue(tmp_path):
+    # 手动「记录进展 → 已回复」写的是 interactions 表，也要让岗位退出跟进
+    from jobpilot.services.followup import follow_up_queue
+    from jobpilot.services.progress import record_progress
+
+    ctx = make_ctx(tmp_path, applied_hours_ago=72)
+    assert record_progress(ctx, "boss-1", "replied")["ok"]
+    assert find_due(ctx) == []
+    [row] = follow_up_queue(ctx)["rows"]
+    assert row["state"] == "answered"
+
+
+def test_manual_progress_viewed_still_due(tmp_path):
+    # 「已查看」不是回复，照常跟进
+    from jobpilot.services.progress import record_progress
+
+    ctx = make_ctx(tmp_path, applied_hours_ago=72)
+    record_progress(ctx, "boss-1", "viewed")
+    assert [job.id for job in find_due(ctx)] == ["boss-1"]
+
+
+def test_queue_when_disabled_still_lists(tmp_path):
+    from jobpilot.services.followup import follow_up_queue
+
+    ctx = make_ctx(tmp_path, applied_hours_ago=72)
+    ctx.config.follow_up.enabled = False
+    data = follow_up_queue(ctx)
+    assert data["enabled"] is False
+    assert [row["state"] for row in data["rows"]] == ["disabled"]
+
+
+def test_follow_ups_endpoint_returns_fresh_applied(tmp_path):
+    # 接口层：刚投递 1 小时的岗位也要返回（以前被"未到期且没话术"过滤掉，页面一片空白）
+    from fastapi.testclient import TestClient
+
+    from jobpilot.bootstrap import build_context
+    from jobpilot.web.app import create_app
+
+    make_ctx(tmp_path, applied_hours_ago=1)
+    db = tmp_path / "followup.db"
+    http = TestClient(create_app(lambda: build_context(AppConfig(), repo=Repo(connect(db)))),
+                      base_url="http://127.0.0.1:8700")
+    data = http.get("/api/follow-ups").json()
+    assert [(row["id"], row["state"]) for row in data["rows"]] == [("boss-1", "waiting")]

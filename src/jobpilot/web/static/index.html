@@ -8,6 +8,9 @@
 <!-- 主题要在首帧之前定：app.js 是 module（延后执行），等它来改 data-theme 时，浅色用户已经看到一闪深色 -->
 <script>try { document.documentElement.setAttribute('data-theme', localStorage.getItem('jp-theme') || 'dark'); } catch (e) {}</script>
 <link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/trends.css">
+<link rel="stylesheet" href="/static/css/tasks.css">
+<link rel="stylesheet" href="/static/css/overview.css">
 <svg style="display:none" aria-hidden="true"><defs>
   <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
   <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
@@ -106,43 +109,72 @@
 
     <div class="content" id="content">
       <div class="offline-bar" id="offlineBar" role="alert"><svg class="ico"><use href="#i-alert"/></svg><span>连不上看板服务（可能已经自动退出）。恢复后这里会自动消失；一直不恢复就双击「启动 JobPilot」重开。</span></div>
-      <section class="view is-active" data-view="overview">
-        <!-- 流程四步：采集 → 待评分 → 待确认 → 投递（数量 + 该点的按钮） -->
+      <section class="view is-active ov" data-view="overview">
+        <!-- 流程四步：待评分 → 待确认 → 已确认待投 → 今日已投 -->
         <div class="pipeline" id="kpis"></div>
-        <div class="cols ov-cols">
-          <div class="col-main">
-            <div class="card">
-              <div class="card-head">
-                <h2><svg class="ico"><use href="#i-bolt"/></svg>任务</h2>
-                <span class="pill" id="taskPill">空闲</span>
-                <div class="grow"></div>
-                <span class="muted small" id="taskMeta"></span>
-              </div>
-              <div class="card-body">
-                <div id="progress"></div>
-                <pre class="logs" id="logs"></pre>
+        <!-- 2026-10-20 一屏概览：风控 + 趋势一行，任务 + 待确认一行（宽屏不用上下滑动） -->
+        <div class="ov-mid">
+          <!-- 风控仪表：4 个平台各一行；点一行，明细在卡片里展开（宽屏一屏布局时替换列表，卡片高度不变） -->
+          <div class="card risk-card">
+            <div class="card-head">
+              <h2><svg class="ico"><use href="#i-shield"/></svg>风控仪表</h2>
+              <div class="grow"></div>
+              <span class="muted small" id="riskHint"></span>
+            </div>
+            <div class="card-body" id="risk"></div>
+          </div>
+          <!-- 趋势：每天采集 / 投递（views/trends.js 画） -->
+          <div class="card trend-card">
+            <div class="card-head">
+              <h2><svg class="ico"><use href="#i-chart"/></svg>趋势</h2>
+              <div class="grow"></div>
+              <div class="trend-range" id="trendRange" role="group" aria-label="时间范围">
+                <button type="button" class="seg-item" data-days="1">今天</button>
+                <button type="button" class="seg-item" data-days="7">近 7 天</button>
+                <button type="button" class="seg-item" data-days="14">近 14 天</button>
+                <button type="button" class="seg-item" data-days="30">近 30 天</button>
               </div>
             </div>
-            <div class="card">
-              <div class="card-head">
-                <h2><svg class="ico"><use href="#i-inbox"/></svg>待确认投递 <span class="pill" id="pendingCount">0</span></h2>
-                <div class="grow"></div>
-                <button class="btn small" id="btnConfirmAll">全部确认</button>
-                <button class="btn small ghost" id="btnRejectAll">全部拒绝</button>
+            <div class="card-body" id="trendBody"></div>
+          </div>
+        </div>
+        <!-- 任务 + 待确认：左右并排、等高，各自卡内滚动；一边空了也不跳布局 -->
+        <div class="ov-work no-task no-pending" id="ovWork">
+          <div class="card task-card is-compact" id="taskCard">
+            <div class="card-head">
+              <h2><svg class="ico"><use href="#i-bolt"/></svg>任务监控台</h2>
+              <span class="pill" id="taskPill">空闲</span>
+              <span class="muted small task-idle-text" id="taskIdleText"></span>
+              <div class="grow"></div>
+              <span class="muted small" id="taskMeta"></span>
+            </div>
+            <div class="card-body" id="taskBody">
+              <div class="task-list" id="taskList"></div>
+              <div id="progress"></div>
+              <div class="tl" id="taskTimeline">
+                <div class="tl-head"><button class="tl-toggle" id="taskLogToggle" type="button" aria-expanded="true" aria-controls="logs">
+                    <b>运行日志</b><span class="tl-count muted small" id="taskLogCount"></span><span class="tl-chev" aria-hidden="true">▾</span></button>
+                  <span class="muted small tl-help">每个任务做了什么，按时间排；出问题时先看这里</span><div class="grow"></div>
+                  <div class="tl-filter" id="taskLogFilter" role="group" aria-label="按平台看日志"></div></div>
+                <ol class="tl-list" id="logs" aria-live="off"></ol>
               </div>
-              <div class="card-body" id="pending"></div>
-              <div class="pager" id="pendingPager" hidden></div>
             </div>
           </div>
-          <div class="col-side">
-            <div class="card">
-              <div class="card-head">
-                <h2><svg class="ico"><use href="#i-shield"/></svg>风控仪表</h2>
-                <div class="grow"></div>
-                <span class="muted small" id="riskHint"></span>
+          <div class="card pending-card is-compact" id="pendingCard">
+            <div class="card-head">
+              <h2><svg class="ico"><use href="#i-inbox"/></svg>投递队列</h2>
+              <div class="seg q-tabs" id="queueTabs" role="tablist" aria-label="投递队列">
+                <button type="button" class="seg-item" role="tab" data-q="pending">待确认 <b id="qnPending">0</b></button>
+                <button type="button" class="seg-item" role="tab" data-q="approved">已确认待投 <b id="qnApproved">0</b></button>
+                <button type="button" class="seg-item" role="tab" data-q="applied">今日已投 <b id="qnApplied">0</b></button>
               </div>
-              <div class="card-body" id="risk"></div>
+              <span class="muted small task-idle-text" id="pendingIdleText">暂无待确认、待投或今天投出的岗位</span>
+              <div class="grow"></div>
+              <button class="btn small" id="btnConfirmAll">全部确认</button>
+              <button class="btn small ghost" id="btnRejectAll">全部拒绝</button>
             </div>
+            <div class="card-body" id="pending"></div>
+            <div class="pager" id="pendingPager" hidden></div>
           </div>
         </div>
       </section>
@@ -160,6 +192,7 @@
             <button class="btn small ghost" id="btnBadNature" aria-pressed="false" title="隐藏识别为外包/培训/营销话术的岗位">只看正常岗</button>
             <button class="btn small ghost" id="btnBin">回收站</button>
             <a class="btn small ghost" id="btnExport" href="/api/export" download title="导出当前筛选下的岗位">导出 CSV</a>
+            <span class="pager-size-slot" id="jobPageSize"></span>
           </div>
           <div class="seg" id="jobStats"></div>
           <div class="bulk" id="jobBulk" hidden>
@@ -191,6 +224,15 @@
       </section>
 
       <section class="view" data-view="monitor">
+        <!-- 2026-10-20：按平台 / 公司快速找到要回复的 HR（两张表一起筛，服务端分页） -->
+        <div class="mon-bar" role="search">
+          <select id="monPlatform" class="select" aria-label="按平台筛选"></select>
+          <label class="field search mon-q"><svg class="ico"><use href="#i-search"/></svg>
+            <input id="monQuery" type="search" placeholder="搜公司 / 岗位 / HR 名字…" aria-label="搜公司、岗位或 HR"></label>
+          <button class="btn small ghost" id="monClear" type="button" hidden>清除筛选</button>
+          <div class="grow"></div>
+          <span class="muted small mon-auto" id="monAuto"></span>
+        </div>
         <div class="card">
           <div class="card-head">
             <h2><svg class="ico"><use href="#i-clock"/></svg>待跟进 <span class="pill" id="followCount">0</span></h2>
@@ -198,7 +240,14 @@
             <button class="btn small primary" id="btnFollowUp">生成跟进话术</button>
             <span class="muted small" id="followHint"></span>
           </div>
-          <div class="card-body" id="followUps"></div>
+          <!-- 全部已投递岗位都列出来：没到跟进时间的也显示"还要等多久"，免得刚投完就看到一片空白 -->
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>平台</th><th>公司</th><th>岗位</th><th>投递时间</th><th>跟进</th><th>跟进话术</th></tr></thead>
+              <tbody id="followUps"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="followPager" hidden></div>
         </div>
         <div class="card">
           <div class="card-head">
@@ -206,14 +255,16 @@
             <div class="grow"></div>
             <span class="pill" id="hrMode">未开放</span>
             <span class="muted small" id="hrHint"></span>
+            <button class="btn small" id="btnMonitorNow" type="button" title="现在就查一遍：BOSS 读聊天列表，其他平台读「我的投递」，把 HR 的查看 / 回复 / 邀面试写进来（不点任何岗位、不进会话）">检查一次</button>
           </div>
           <div class="seg" id="hrStats"></div>
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>公司</th><th>岗位</th><th>HR</th><th>状态</th><th>最近消息</th><th>时间</th></tr></thead>
+              <thead><tr><th>平台</th><th>公司</th><th>岗位</th><th>HR</th><th>状态</th><th>最近消息</th><th>时间</th><th></th></tr></thead>
               <tbody id="hr"></tbody>
             </table>
           </div>
+          <div class="pager" id="hrPager" hidden></div>
         </div>
       </section>
 

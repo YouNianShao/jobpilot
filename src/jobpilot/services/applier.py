@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..models import LoginRequired, PlatformRisk, Status
 from ..platforms import build_default_registry, supports
+from ..safety import attention
 from ..safety.policy import APPLY_ONE, Action, Denied
 from ..safety.throttle import human_interval, jitter
 from .context import ServiceContext
@@ -49,11 +50,14 @@ def _apply_one(ctx: ServiceContext, driver, browser, platform: str, job, action)
         result = driver.apply(ctx.driver_context(browser, platform), job)
     except (PlatformRisk, LoginRequired) as exc:
         # LoginRequired 没有 kind 属性：以前 getattr 兜底成 "blocked"，掉登录也会把平台锁掉
+        # 验证码 / 掉登录：那一页留在调试浏览器里、切到前台，看板马上提醒你
+        attention.flag(ctx.repo, platform, exc, browser)
         if isinstance(exc, LoginRequired):
             return "stop", f"{platform} 登录态失效：{exc}", 0.0
         ctx.policy.record_risk(platform, exc.kind, str(exc))
         return "stop", f"{platform} 命中风控：{exc.kind}", 0.0
 
+    attention.clear(ctx.repo, platform)   # 岗位页正常打开了：之前的「待你处理」已经过去了
     ctx.repo.set_status(job.id, result.status)
     ctx.repo.add_event(job.id, "apply", f"{result.status} {result.detail}".strip())
     if result.status == Status.APPLIED.value:
@@ -169,6 +173,19 @@ def apply_all(ctx: ServiceContext, *, registry=None, limit: int | None = None, c
     total = sum(len(q) for q in queues.values())
     ready_at = {p: 0.0 for p in queues}          # 这个平台下一次可以投的时刻（单调时钟）
     done = 0
+    # 任务监控台：每个平台一条小进度条。until 用墙上时间（epoch 秒），界面自己倒计时
+    sizes = {p: len(q) for p, q in queues.items()}
+
+    def lane(platform: str, state: str, *, wait: float = 0.0, label: str = "", reason: str = "") -> None:
+        stats = per.get(platform) or {}
+        ctx.lane(platform, {"done": stats.get("applied", 0) + stats.get("failed", 0) + stats.get("already", 0),
+                            "applied": stats.get("applied", 0), "total": sizes.get(platform, 0), "state": state,
+                            "until": round(_time.time() + wait, 1) if wait > 0 else 0, "label": label, "reason": reason})
+
+    for platform, why in skipped.items():
+        ctx.lane(platform, {"done": 0, "applied": 0, "total": 0, "state": "skipped", "until": 0, "label": "", "reason": why})
+    for platform in queues:
+        lane(platform, "waiting")
     if not queues:
         return {"platform": "all", "applied": 0, "per_platform": {}, "skipped": skipped,
                 "note": "没有已确认、待投递的岗位" if not skipped else ""}
@@ -189,11 +206,13 @@ def apply_all(ctx: ServiceContext, *, registry=None, limit: int | None = None, c
             cooling = ctx.policy.cooldown_remaining(platform)
             if cooling > 0:
                 ready_at[platform] = clock() + cooling
+                lane(platform, "cooling", wait=cooling)
                 ctx.log(f"[apply] {registry.get(platform).name} 采集后冷却中，约 {cooling / 60:.0f} 分钟后再投")
                 continue
             job = queues[platform].pop(0)
             done += 1
             ctx.progress(done, total, f"{registry.get(platform).name}：{job.title}@{job.company}")
+            lane(platform, "applying", label=f"{job.title}@{job.company}")
             kind, reason, backoff = _apply_one(ctx, registry.get(platform), browser, platform, job, actions[platform])
             stats = per[platform]
             if kind == "stop":
@@ -201,6 +220,7 @@ def apply_all(ctx: ServiceContext, *, registry=None, limit: int | None = None, c
                 total -= len(queues[platform])            # 剩下的不再算进进度
                 ctx.log(f"[apply] {registry.get(platform).name} 停止：{reason}（其它平台继续）")
                 queues.pop(platform)
+                lane(platform, "stopped", reason=reason)
                 continue
             stats[kind] += 1
             if kind == "applied":
@@ -211,6 +231,9 @@ def apply_all(ctx: ServiceContext, *, registry=None, limit: int | None = None, c
                 ready_at[platform] = clock() + min(backoff, 30.0)
             if not queues[platform]:
                 queues.pop(platform)
+                lane(platform, "done")
+            else:
+                lane(platform, "waiting", wait=max(0.0, ready_at[platform] - clock()))
     finally:
         browser.close()
 

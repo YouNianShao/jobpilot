@@ -6,7 +6,7 @@
 - 详情页标签已改版，经验/学历改从列表取
 
 投递（打招呼）已于 2026-10-10 实机核验（点击后平台会先发默认招呼语，我们在聊天面板里补发个性化招呼语）；
-聊天监测仍未核验，故 capabilities 目前声明 collect + apply。
+聊天监测 2026-10-16 真机只读核验了聊天列表（只读列表层，绝不点进会话），capabilities = collect + apply + monitor。
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import json
 import re
 from urllib.parse import quote
 
+from ..browser import humanize
 from ..models import (
     ApplyResult,
     CollectResult,
@@ -27,6 +28,7 @@ from ..models import (
     normalize,
 )
 from ..prefilter import prefilter
+from ..safety.attention import release_page, tag_page
 from ..safety.policy import SEND_MESSAGE, Action, Denied, is_graceful_stop
 from ..safety.risk import classify_risk
 
@@ -34,9 +36,12 @@ from ..safety.risk import classify_risk
 # 以前只内置 20 个，别的城市会被静默跳过 —— 那是"跑了但什么都没采到"的典型。
 from .base import DriverContext, _ago
 from .boss_cities import CITY_CODES, HOT_CITIES  # noqa: F401  （HOT_CITIES 给界面做快捷选择）
+from .record_monitor import write_observation
 
 SEARCH_URL = "https://www.zhipin.com/web/geek/jobs?query={kw}&city={city}"
 JOB_URL = "https://www.zhipin.com/job_detail/{job_id}.html"
+# 列表页拟人悬停的目标：和 JS_LIST 用同一个卡片选择器
+CARD_SELECTOR = ".job-card-wrap"
 
 # 聊天列表页：监测**只读这一页**，绝不点进任何一个会话（点进去会把未读标成已读）
 CHAT_URL = "https://www.zhipin.com/web/geek/chat"
@@ -161,6 +166,27 @@ def classify_chat_row(row: dict) -> tuple[str, str] | None:
     return "replied", text
 
 
+# 监测时拿来对会话的岗位状态：投出去了的（含「早就聊过」和已经记过回复 / 面试的）
+MONITOR_JOB_STATUSES = (
+    Status.APPLIED.value, Status.ALREADY.value, Status.REPLIED.value, Status.INTERVIEW.value,
+)
+
+
+def boss_jobs_by_company(repo) -> dict[str, list[str]]:
+    """归一化公司名 -> BOSS 上已打过招呼的岗位 id（只看 BOSS、只看投出去了的）。"""
+    out: dict[str, list[str]] = {}
+    for status in MONITOR_JOB_STATUSES:
+        for job in repo.list_jobs(platform="boss", status=status, limit=5000):
+            out.setdefault(normalize(job.company), []).append(job.id)
+    return out
+
+
+def unread_of(row: dict) -> bool:
+    """列表上的未读角标：有数字（或任何非 0 文字）= 有没读的消息。"""
+    badge = str(row.get("unread") or "").strip()
+    return bool(badge) and badge not in ("0",)
+
+
 def city_code(city: str) -> str | None:
     """城市名 -> 9 位城市码；直接给 9 位码也认（方便从浏览器地址栏复制）。"""
     text = (city or "").strip()
@@ -219,22 +245,22 @@ def _looks_logged_out(text: str) -> bool:
 
 def _guard(ctx: DriverContext, page, expected_selector: str, label: str) -> None:
     """等待预期内容出现；超时后再判定是风控、掉登录还是改版，fail-closed。"""
-    if page.wait_for(expected_selector, timeout_ms=12000):
+    if page.wait_for(expected_selector, timeout_ms=30000):
         return
     text, url = page.text(), page.url
     kind = classify_risk(text, url)
     if kind == "login_required" or (kind is None and _looks_logged_out(text)):
-        raise LoginRequired(f"{label} 需要登录：BOSS 的登录已失效，请在调试 Chrome 里重新登录后再试")
+        raise tag_page(LoginRequired(f"{label} 需要登录：BOSS 的登录已失效，请在调试 Chrome 里重新登录后再试"), page)
     if kind:
-        raise PlatformRisk(kind, label)
+        raise tag_page(PlatformRisk(kind, label), page)
     raise PageReadError(f"{label} 未找到预期内容（可能改版或被拦截）")
 
 
 class BossDriver:
     key = "boss"
     name = "BOSS直聘"
-# collect 与 apply 都已实机核验；monitor（聊天监测）仍未核验 —— 打开会话会把消息标已读，需要单独授权
-    capabilities = frozenset({"collect", "apply"})
+# collect / apply 已实机核验；monitor 只读聊天列表（2026-10-16 核验）—— 打开会话会把消息标已读，所以从不点进去
+    capabilities = frozenset({"collect", "apply", "monitor"})   # monitor：2026-10-16 真机只读核验聊天列表
 
     # 界面用这两个属性判断「城市是否受限」：受限的平台填了表外的城市会被跳过
     supported_cities = CITY_CODES
@@ -260,7 +286,8 @@ class BossDriver:
                     continue
                 for keyword in cfg.keywords:
                     slot = f"{city}|{keyword}"
-                    for page_no in range(1, cfg.max_pages + 1):
+                    run = ctx.slot_begin(slot, keyword, city, cfg.max_pages)
+                    for page_no in range(1, run.limit + 1):
                         recent = ctx.skip_recently_collected(slot, page_no)
                         if recent is not None:
                             result.skipped += 1
@@ -280,7 +307,10 @@ class BossDriver:
                             ctx.note_collect(slot, page_no)     # 这页确实没有结果，也算采过
                             break
                         result.seen += len(items)
+                        new_before = result.new
                         ctx.log(f"[boss] {city}/{keyword} 第 {page_no} 页 {len(items)} 条")
+                        # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
+                        humanize.after_list(ctx, search_page, CARD_SELECTOR)
 
                         for item in items:
                             ctx.stop.check()
@@ -340,6 +370,9 @@ class BossDriver:
                             else:
                                 result.duplicate += 1
                         ctx.note_collect(slot, page_no)    # 这一页处理完才记；被打断就不记
+                        if ctx.slot_page(run, page_no, seen=len(items), new=result.new - new_before):
+                            break
+                    ctx.slot_end(result, run)
         except Denied as exc:
             # 预算耗尽 / 平台被锁：停止该平台，已入库的岗位保留
             if is_graceful_stop(exc):
@@ -349,11 +382,7 @@ class BossDriver:
                 raise
         finally:
             for page in (search_page, detail_page):
-                if page is not None:
-                    try:
-                        page.close()
-                    except Exception:  # noqa: BLE001 - 关闭失败不影响结果
-                        pass
+                release_page(page)   # 验证 / 掉登录的那一页留给你处理
         if skipped_cities and len(skipped_cities) == len(cfg.cities):
             # 一个城市都没跑成：直接说清楚，别让任务显示"完成"却一条都没采到
             result.stopped = ("配置的城市都不在内置表里：" + "、".join(skipped_cities)
@@ -368,7 +397,11 @@ class BossDriver:
         else:
             page.goto(url)
         _guard(ctx, page, ".job-sec-text", f"[boss] 详情页 {ext_id}")
-        return {**parse_detail(page.eval(JS_DETAIL)), "_page": page}
+        detail = parse_detail(page.eval(JS_DETAIL))
+        if detail.get("jd"):
+            # 读到 JD 后像人一样读一会儿再走：秒开秒关、从不滚动的详情页访问是很明显的机器特征
+            humanize.after_detail(ctx, page, detail["jd"])
+        return {**detail, "_page": page}
 
         # ---------------- 投递 / 监测（待实机核验） ----------------
     # 预演用的候选选择器：只"看"不"点"，所以可以先在真机上跑，把证据攒齐再决定要不要开放自动投递
@@ -427,10 +460,7 @@ class BossDriver:
             data = page.eval(self.JS_APPLY_PROBE) or {}
             risk = classify_risk(page.text(), page.url)
         finally:
-            try:
-                page.close()
-            except Exception:  # noqa: BLE001
-                pass
+            release_page(page)   # 验证 / 掉登录的那一页留给你处理
 
         button = data.get("chatButton")
         if risk:
@@ -475,6 +505,8 @@ class BossDriver:
             if "继续沟通" in label:
                 return ApplyResult(status=Status.ALREADY.value, detail="已经和这个岗位打过招呼")
 
+            # 人会先看一眼岗位再点沟通：只停留 / 滚动 / 挪鼠标，不加任何点击
+            humanize.before_apply(ctx, page)
             page.click(self.APPLY_CHAT_BUTTON)
             ctx.log("[boss] 已点「立即沟通」——平台先发出了账号里的默认招呼语")
 
@@ -510,10 +542,7 @@ class BossDriver:
                 return ApplyResult(status=Status.APPLIED.value, detail="已打招呼 + 已发出个性化招呼语")
             return ApplyResult(status=Status.FAILED.value, detail="点了发送，但面板里没看到「已发送」")
         finally:
-            try:
-                page.close()
-            except Exception:  # noqa: BLE001
-                pass
+            release_page(page)   # 验证 / 掉登录的那一页留给你处理
 
     # ---------------- 监测（只读列表，绝不进会话） ----------------
     def monitor(self, ctx: DriverContext) -> MonitorResult:
@@ -532,13 +561,11 @@ class BossDriver:
             if not isinstance(rows, list):
                 rows = []
 
-            # 会话列表里没有岗位标题，只能靠公司名把会话对回岗位池；同名公司有多个
-            # 岗位时**不猜** —— 宁可不匹配，也不要张冠李戴。
-            by_company: dict[str, list[str]] = {}
-            for job in ctx.repo.list_jobs(limit=5000):
-                by_company.setdefault(normalize(job.company), []).append(job.id)
-
-            known = {row["key"]: row["state"] for row in ctx.repo.list_interactions(limit=5000)}
+            # 会话列表里没有岗位标题，只能靠公司名把会话对回岗位池。只比 BOSS 上真的打过招呼的岗位
+            # （以前拿全部平台、全部状态的岗位比，同名公司一多就全是「对不上」）；同名公司还有
+            # 多个岗位时**不猜** —— 宁可不匹配，也不要张冠李戴。
+            by_company = boss_jobs_by_company(ctx.repo)
+            known = ctx.repo.interactions_by_key(self.key)
             events: dict[str, int] = {}
             for row in rows:
                 if not isinstance(row, dict):
@@ -552,20 +579,17 @@ class BossDriver:
                 hits = by_company.get(normalize(company), [])
                 job_id = hits[0] if len(hits) == 1 else None
                 key = f"auto:{job_id}" if job_id else f"auto:{self.key}:{hr}|{company}"
-                if STATE_RANK.get(known.get(key, ""), 0) >= STATE_RANK.get(state, 0):
-                    continue          # 这条线索已经走得更远了，不往回退
-                ctx.repo.upsert_interaction(
-                    key=key, platform=self.key, job_id=job_id, hr_name=hr,
-                    state=state, last_text=text, deeplink=CHAT_URL, company=company,
+                outcome = write_observation(
+                    ctx, key=key, platform=self.key, job_id=job_id, hr_name=hr, state=state,
+                    text=text, deeplink=CHAT_URL, company=company,
+                    unread=unread_of(row), msg_time=str(row.get("time") or "").strip(), known=known,
                 )
-                events[state] = events.get(state, 0) + 1
+                if outcome == "advanced":
+                    events[state] = events.get(state, 0) + 1
             result.checked = len(rows)
             result.events = events
         finally:
-            try:
-                page.close()
-            except Exception:  # noqa: BLE001 - 关页面失败不影响监测结果
-                pass
+            release_page(page)   # 验证 / 掉登录的那一页留给你处理
         ctx.log(f"[boss] 监测 {result.checked} 条会话（只读列表，没打开任何会话）")
         return result
 

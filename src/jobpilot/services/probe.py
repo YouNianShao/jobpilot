@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from ..models import LoginRequired, PlatformRisk
 from ..platforms import build_default_registry
+from ..safety import attention
 from .context import ServiceContext
 
 
@@ -31,10 +32,12 @@ def probe_apply(ctx: ServiceContext, job_id: str, *, registry=None) -> dict:
     try:
         report = probe(ctx.driver_context(browser, job.platform), job)
     except LoginRequired as exc:
+        attention.flag(ctx.repo, job.platform, exc, browser)
         return {"error": f"登录态失效：{exc}", "platform": job.platform, "job_id": job_id,
                 "need_login": True, "sent_anything": False}
     except PlatformRisk as exc:
         ctx.policy.record_risk(job.platform, exc.kind, exc.detail)
+        attention.flag(ctx.repo, job.platform, exc, browser)
         return {"error": f"页面命中风控：{exc.kind}", "platform": job.platform,
                 "job_id": job_id, "sent_anything": False}
     except Exception as exc:  # noqa: BLE001 - 预演失败不该带走别的功能

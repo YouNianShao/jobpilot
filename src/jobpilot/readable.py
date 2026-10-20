@@ -109,8 +109,52 @@ def _nothing(mode: str, result: dict) -> str:
     return "完成"
 
 
+LOW_YIELD_RATE = 0.05     # 新岗位率低于 5%
+LOW_YIELD_SEEN = 40       # 且至少看过 40 张卡片才下结论（样本太少不算）
+LOW_YIELD_MAX_HINTS = 3
+
+
+def low_yield_hints(result: object) -> list[str]:
+    """新岗位率很低的 关键词×城市 组合 → 「AI · 上海 新岗位只有 3%，可以换个关键词或加城市」。
+
+    单平台采集读 ``result["slots"]``；多平台 / 全流程读 ``per_platform`` / ``steps.collect`` 下各平台的。
+    """
+    found: list[tuple[float, str]] = []
+
+    def walk(node: object, platform: str, prefix: bool) -> None:
+        if not isinstance(node, dict):
+            return
+        platform = str(node.get("platform") or platform)
+        for slot in node.get("slots") or []:
+            if not isinstance(slot, dict):
+                continue
+            seen, new = int(slot.get("seen") or 0), int(slot.get("new") or 0)
+            if seen < LOW_YIELD_SEEN or new / seen >= LOW_YIELD_RATE:
+                continue
+            label = str(slot.get("label") or slot.get("slot") or "")
+            head = f"{platform_name(platform)} {label}" if prefix and platform else label
+            found.append((new / seen, f"{head} 新岗位只有 {new * 100 / seen:.0f}%，可以换个关键词或加城市"))
+        per = node.get("per_platform")
+        if isinstance(per, dict):
+            for key, sub in per.items():
+                walk(sub, str(key), len(per) > 1)
+        steps = node.get("steps")
+        if isinstance(steps, dict):
+            walk(steps.get("collect"), platform, prefix)
+
+    walk(result, "", False)
+    found.sort(key=lambda item: item[0])
+    return [text for _, text in found[:LOW_YIELD_MAX_HINTS]]
+
+
 def run_summary(mode: str, result: object, error: str = "") -> str:
-    """任务历史「结果 / 原因」一列。"""
+    """任务历史「结果 / 原因」一列（采集类结果末尾附上低产出组合的提示）。"""
+    text = _run_summary(mode, result, error)
+    hints = [] if error else low_yield_hints(result)
+    return "；".join([text, *hints]) if hints else text
+
+
+def _run_summary(mode: str, result: object, error: str = "") -> str:
     if error:
         return clean(error)
     if not isinstance(result, dict):
@@ -178,6 +222,7 @@ def run_failed(result: object, error: str = "") -> bool:
 EVENT_NAMES = {
     "risk_lock": "暂停平台", "rate_stop": "速率停手", "risk": "风控信号",
     "page_error": "页面异常", "collect": "采集", "monitor": "监测",
+    "risk_resume": "你已处理",
 }
 
 _KV = re.compile(r"(\w+)=(\d+)")

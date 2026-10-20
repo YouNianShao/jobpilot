@@ -355,10 +355,18 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 /* 翻页条始终贴在卡片底部 */
 .act-row > .card > .pager { margin-top: auto; }
 
-/* 概览：左边「任务 + 待确认」，右边「风控仪表」。右边是固定的一块，不再为了凑高度往里塞别的卡片
-   （以前塞过「近 14 天节奏」，它和「记录」页的内容是重复的）。两边各按自己的内容高度，顶部对齐 */
-.ov-cols { align-items: start; }
-.ov-cols .card > .pager { margin-top: auto; }
+/* 概览：流程四步 → 趋势 → 风控仪表 → 任务监控台 → 待确认，每张都占满整行。
+   2026-10-20 任务监控台：横道要宽，不再和待确认并排；哪张是空的就缩成一行横条 */
+.ov-work { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.ov-work > .card { display: flex; flex-direction: column; min-height: 0; }
+.ov-work .card > .pager { margin-top: auto; flex: none; }
+/* #pending 自己有 display:flex（id 选择器），这里也用 id 才压得住 */
+.task-card.is-compact > .card-body, .pending-card.is-compact > #pending,
+.pending-card.is-compact > .pager, .pending-card.is-compact #btnConfirmAll, .pending-card.is-compact #btnRejectAll { display: none; }
+.task-card.is-compact > .card-head, .pending-card.is-compact > .card-head { border-bottom: 0; }
+.pending-card:not(.is-compact) #pendingIdleText { display: none; }
+.task-idle-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-list { display: grid; gap: 10px; }
 
 /* 看起来像文字链接的按钮 */
 button.link, a.link { padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; text-decoration: none; }
@@ -450,35 +458,58 @@ button.link:hover, a.link:hover { text-decoration: underline; }
 .step-body span { font-size: var(--fs-sm); color: var(--muted); }
 .step > .btn { margin-left: auto; }
 
-/* ---------------- 10. 风控仪表 ---------------- */
-.psafe {
-  border: 1px solid var(--line-soft); border-radius: var(--r); background: var(--fill-1); overflow: hidden;
-  transition: border-color var(--t) var(--ease), background var(--t) var(--ease);
+/* ---------------- 10. 风控仪表 ----------------
+   4 个平台一行 4 张小卡（等高）；点一张，明细条在整行下面展开，小三角指着选中的那张 */
+.rtiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+.rtile {
+  display: flex; flex-direction: column; align-items: stretch; gap: 10px; min-width: 0; padding: 12px 14px;
+  text-align: left; border: 1px solid var(--line-soft); border-radius: var(--r); background: var(--fill-1);
+  transition: border-color var(--t) var(--ease), background var(--t) var(--ease), box-shadow var(--t) var(--ease);
 }
-.psafe:hover { border-color: var(--line); }
-.psafe + .psafe { margin-top: 8px; }
-.psafe-head {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 14px; text-align: left;
-  transition: background var(--t) var(--ease);
-}
-.psafe-head:hover { background: var(--fill-1); }
-.psafe-head b { font-size: var(--fs-md); font-weight: var(--fw-bold); }
-.psafe-head .chev { margin-left: 2px; color: var(--muted); transition: transform var(--t) var(--ease); }
-.psafe.is-open .psafe-head .chev { transform: rotate(90deg); }
-.psafe-next { margin-left: auto; font-size: var(--fs-sm); color: var(--warn); font-variant-numeric: tabular-nums; }
+.rtile:hover { border-color: var(--line); }
+.rtile:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.rtile.is-open { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent-line); }
+.rtile-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.rtile-head b { font-size: var(--fs-md); font-weight: var(--fw-bold); }
+.rtile .lock { margin-top: 0; }
+.rtile > .psafe-sum { margin-top: auto; }
+/* 有「我已处理，继续」时：小卡和下面那块包在一起占一格（按钮里不能套按钮） */
+.rtile-wrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rtile-wrap > .rtile { flex: 1; border-color: var(--bad); }
+.rtile-attn { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.rtile-attn .lock { margin-top: 0; }
+.psafe-next { display: block; font-size: var(--fs-sm); color: var(--warn); font-variant-numeric: tabular-nums; }
 .psafe-next.is-live { color: var(--ok); }
-.psafe-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 0 14px 12px; }
+.psafe-sum { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .psafe-sum .kv { display: grid; gap: 2px; min-width: 0; }
-.psafe-sum .kv > span { font-size: var(--fs-xs); color: var(--muted); }
+.psafe-sum .kv > span { font-size: var(--fs-xs); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .psafe-sum .kv > b { font-size: var(--fs-md); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
-.psafe-body { display: none; padding: 0 14px 14px; }
-.psafe.is-open .psafe-body { display: grid; animation: viewIn var(--t) var(--ease); }
-.psafe-body .mrows { margin-top: 0; padding-top: 12px; border-top: 1px solid var(--line-soft); }
-.psafe-foot {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 10px;
-  border-top: 1px solid var(--line-soft); font-size: var(--fs-sm); color: var(--muted);
+.psafe-sum .kv > b.bad { color: var(--bad); }
+/* 明细条：左说明 / 中四项额度 / 右两个速率窗口；上边的小三角用 --caret-x 对准选中的小卡 */
+.rdet {
+  position: relative; display: grid; grid-template-columns: minmax(180px, .8fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 20px; align-items: start; margin-top: 14px; padding: 14px 16px;
+  border: 1px solid var(--accent-line); border-radius: var(--r); background: var(--fill-1);
+  animation: viewIn var(--t) var(--ease);
 }
-.psafe-foot b { color: var(--text); font-weight: var(--fw-bold); }
+.rdet::before {
+  content: ''; position: absolute; top: -7px; left: var(--caret-x, 12%); width: 12px; height: 12px;
+  transform: translateX(-50%) rotate(45deg); background: var(--fill-1);
+  border-left: 1px solid var(--accent-line); border-top: 1px solid var(--accent-line);
+}
+.rdet-intro { display: grid; gap: 6px; }
+.rdet-intro b { font-size: var(--fs-md); font-weight: var(--fw-bold); }
+.rdet-h { font-size: var(--fs-xs); color: var(--muted); margin-bottom: 8px; }
+.rdet .mrows, .rdet .mrows.rate { margin-top: 0; padding-top: 0; border-top: 0; }
+@media (max-width: 1180px) {
+  .rtiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rdet { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .rdet-intro { grid-column: 1 / -1; }
+}
+@media (max-width: 560px) {
+  .rtiles { grid-template-columns: minmax(0, 1fr); }
+  .rdet { grid-template-columns: minmax(0, 1fr); }
+}
 .mrows { display: grid; gap: 8px; margin-top: 12px; }
 .mrows.rate { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line-soft); }
 .mrow { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: var(--fs-sm); }
@@ -1000,10 +1031,15 @@ kbd {
 .pager-gap { min-width: 20px; text-align: center; color: var(--muted); }
 .pager-jump-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
 .pager-jump { width: 64px; height: var(--ctl-h-sm) !important; text-align: center; }
+/* 「每页 N 条」：翻页条和岗位池卡头共用，紧凑高度、和页码在一条线上 */
+.pager-size-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
+.pager-size { width: 72px; height: var(--ctl-h-sm); padding: 0 26px 0 10px; font-size: var(--fs-sm); background-position: right 6px center; font-variant-numeric: tabular-nums; }
+.pager-size-slot { display: inline-flex; }
 
 /* ---------------- 22. 响应式 ---------------- */
 @media (max-width: 1180px) {
   .cols { grid-template-columns: minmax(0, 1fr); }
+  .ov-work { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 1000px) {
   .cfg-layout { grid-template-columns: minmax(0, 1fr); }
@@ -1060,7 +1096,9 @@ details.tech[open] > summary::before { content: '▾ '; }
 .fs-head { display: flex; align-items: flex-start; gap: 12px; padding: 18px 24px 14px; border-bottom: 1px solid var(--line-soft); }
 .fs-head h3 { font-size: var(--fs-lg); margin-bottom: 4px; }
 .fs-head .btn.icon { margin-left: auto; }
-.fs-body { flex: 1; overflow: auto; padding: 16px 24px 24px; display: grid; gap: 18px; align-content: start; }
+.fs-body { flex: 1; min-height: 0; overflow: auto; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 18px; }
+/* 子项不许被压扁：之前是 grid + 列表 overflow:hidden，四个平台都选上时列表被压到面板高度，最后一个平台被裁掉 */
+.fs-body > * { flex: none; }
 .fs-list { display: grid; border: 1px solid var(--line); border-radius: var(--r-lg, 14px); overflow: hidden; }
 .fs-row { padding: 12px 16px; background: var(--panel-solid); transition: background var(--t) var(--ease); }
 .fs-row + .fs-row { border-top: 1px solid var(--line-soft); }
@@ -1108,3 +1146,19 @@ details.tech[open] > summary::before { content: '▾ '; }
 /* 配置页：月薪范围 [最低] K 到 [最高] K */
 .salary-row { display: flex; align-items: center; gap: 8px; }
 .salary-row input { width: 110px; }
+
+/* 概览「趋势」：两张多线图（样式在 css/trends.css）。
+   平台色 2026-10-20 重配并用配色校验脚本验过（深 / 浅两套都过）；原来 BOSS 青和前程无忧蓝太接近，分不清 */
+:root, .trend-card { --tp-boss: #1f9e94; --tp-51job: #d9682e; --tp-liepin: #3d7fd9; --tp-zhaopin: #b08a1c; --tp-x: var(--muted); }
+[data-theme="light"], [data-theme="light"] .trend-card { --tp-boss: #00897d; --tp-51job: #c4561d; --tp-liepin: #2e6fc9; --tp-zhaopin: #9a7a12; }
+.trend-range { display: flex; gap: 6px; }
+
+/* 监测页筛选条（2026-10-20）：平台 + 搜索；未读的行加一个小圆点并加粗 */
+.mon-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mon-bar .select { width: 140px; }
+.mon-q input { min-width: 300px; }
+.mon-auto { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+.table tr.is-unread td { font-weight: var(--fw-bold); }
+.dot-new { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft); vertical-align: middle; }
+@media (max-width: 760px) { .mon-q input { min-width: 0; width: 100%; } .mon-q { flex: 1 1 100%; } .mon-auto { max-width: 100%; } }

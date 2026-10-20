@@ -33,6 +33,7 @@ from ..config import (
 from ..models import Status
 from ..nature import nature_labels
 from ..platforms import build_default_registry
+from ..safety import attention
 from ..safety.throttle import in_send_window
 from ..services import confirmer
 from ..services.context import ServiceContext
@@ -78,6 +79,10 @@ class TaskRequest(BaseModel):
     # 多平台全流程：勾选的平台按顺序依次采集；apply_after = 没有待确认时是否接着投递
     plans: list[PlanItem] | None = None
     apply_after: bool = True
+
+
+class RiskResumeBody(BaseModel):
+    platform: str
 
 
 class JobIds(BaseModel):
@@ -175,7 +180,13 @@ def _account_brief() -> dict:
         return {"id": "A", "name": "账号 A"}
 
 
-def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner | None = None) -> FastAPI:
+def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner | None = None,
+               auto_monitor: bool = True) -> FastAPI:
+    """``auto_monitor``：建好自动监测调度器挂到 ``app.state.auto_monitor``（**不在这里启动**）。
+
+    线程只由 run_server 启动 —— 测试里用 TestClient 建的 app 永远不会自己去开真浏览器；
+    调度器每 tick 读当前配置，monitor.enabled / monitor.auto 关着就什么都不做。
+    """
     def inline_resume() -> Path:
         return ACCOUNT_DIR / "resumes" / "master.md"   # 当前账号的简历位置
 
@@ -208,6 +219,10 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
     app.state.runner = tasks
     app.state.last_seen = None
     app.state.idle_shutdown_minutes = 0.0
+    from ..services.auto_monitor import AutoMonitor
+    from ..services.auto_monitor import schedule as monitor_schedule
+
+    app.state.auto_monitor = AutoMonitor(ctx_factory, tasks) if auto_monitor else None
 
     def with_ctx(fn):
         ctx = ctx_factory()
@@ -246,8 +261,13 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 "running": tasks.running,
                 "paused": tasks.paused,
                 "task": tasks.snapshot(),
+                # 不同平台的任务可以同时跑：全部任务卡片 + 哪些平台正被占用（界面据此禁用对应按钮）
+                "tasks": tasks.snapshots(),
+                "busy_platforms": sorted(tasks.running_platforms()),
                 "platforms": platforms,
                 "locks": locks,
+                # 遇到验证 / 掉登录、等你去调试浏览器里处理的平台（看板据此弹提醒、显示「我已处理，继续」）
+                "attention": attention.active(ctx.repo, ctx.policy, registry.keys()),
                 "applied_today": ctx.policy.applied_today(),
                 "account": _account_brief(),
                 "daily_limit": ctx.config.apply.daily_limit,
@@ -579,23 +599,80 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
 
         return with_ctx(build)
 
+    def page_window(total: int, page: int, limit: int) -> tuple[int, int, int]:
+        """(每页条数, 当前页, 总页数)：越界页退回真正的最后一页，和岗位池一个规矩。"""
+        size = max(1, min(int(limit), 200))
+        pages = max(1, -(-total // size))
+        return size, min(max(1, int(page)), pages), pages
+
     @app.get("/api/follow-ups")
-    def follow_ups():
-        from ..services.followup import find_due
+    def follow_ups(page: int = 0, limit: int = 20, platform: str = "", q: str = ""):
+        """待跟进队列。
+
+        - 不带 ``page``：老格式，``rows`` 是全部已投递岗位（也按 platform / q 过滤）
+        - ``page=N``：只返回这一页的 ``rows``，另带 ``total / due_count / next_wait_at / platforms`` ——
+          标题上的"待跟进 N 个"和"最早一个还要等多久"按**过滤后的**全量算，不能只看这一页
+        - ``platform``：只看这个平台；``q``：公司 / 岗位标题包含这段文字（不分大小写）
+        - ``platforms``：{平台: 条数}，受 q 影响、不受 platform 影响
+        """
+        from ..services.followup import follow_up_queue
 
         def build(ctx: ServiceContext):
-            due_ids = {job.id for job in find_due(ctx, limit=200)}
-            applied = ctx.repo.list_jobs(status=Status.APPLIED.value, limit=500)
-            return [
-                {**job.__dict__, "due": job.id in due_ids}
-                for job in applied if job.follow_up or job.id in due_ids
-            ]
+            # 全部已投递岗位都返回（带跟进状态），没到期的也列出来，界面才能说清"还要等多久"
+            data = follow_up_queue(ctx)
+            text = (q or "").strip().casefold()
+            rows = [row for row in data["rows"]
+                    if not text or text in str(row.get("company") or "").casefold()
+                    or text in str(row.get("title") or "").casefold()]
+            counts: dict[str, int] = {}
+            for row in rows:
+                counts[row.get("platform") or ""] = counts.get(row.get("platform") or "", 0) + 1
+            if platform:
+                rows = [row for row in rows if row.get("platform") == platform]
+            if not page:
+                return {**data, "rows": rows}
+            size, current, pages = page_window(len(rows), page, limit)
+            waiting = [row for row in rows if row["state"] == "waiting"]
+            return {**data, "rows": rows[(current - 1) * size:current * size], "total": len(rows),
+                    "page": current, "pages": pages, "limit": size,
+                    "due_count": sum(1 for row in rows if row["due"]),
+                    "next_wait_at": waiting[0]["due_at"] if waiting else None,
+                    "platforms": counts}
 
         return with_ctx(build)
 
     @app.get("/api/interactions")
-    def interactions(limit: int = 200):
-        return with_ctx(lambda ctx: ctx.repo.list_interactions(limit=limit))
+    def interactions(limit: int = 200, page: int = 0, platform: str = "", q: str = ""):
+        """进展记录。不带 ``page`` 是老格式（数组）；``page=N`` 返回
+        ``{items, total, page, pages, limit, counts, platforms}``。
+
+        ``platform`` / ``q``（公司 / 岗位标题 / HR 名字，不分大小写）在服务端过滤，两种格式都认；
+        ``counts`` 受两者影响，``platforms`` 只受 q 影响。排序：未读在前，再按最近有动静的倒序。
+        """
+        plat = (platform or "").strip() or None
+        if not page:
+            return with_ctx(lambda ctx: ctx.repo.list_interactions(limit=limit, platform=plat, q=q))
+
+        def build(ctx: ServiceContext):
+            counts = ctx.repo.interaction_state_counts(platform=plat, q=q)
+            total = sum(counts.values())
+            size, current, pages = page_window(total, page, limit)
+            items = ctx.repo.list_interactions(limit=size, offset=(current - 1) * size, platform=plat, q=q)
+            return {"items": items, "total": total, "page": current, "pages": pages,
+                    "limit": size, "counts": counts,
+                    "platforms": ctx.repo.interaction_platform_counts(q=q)}
+
+        return with_ctx(build)
+
+    @app.get("/api/monitor/schedule")
+    def monitor_schedule_info():
+        """自动监测的计划：开没开、间隔、时段、上次 / 下次（本地时间）、现在为什么不跑。"""
+        def build(ctx: ServiceContext):
+            plan = monitor_schedule(ctx.config, ctx.repo, tasks, registry=registry)
+            return {key: plan[key] for key in
+                    ("auto", "interval_minutes", "working_hours", "last_run", "next_run", "reason")}
+
+        return with_ctx(build)
 
     @app.get("/api/jobs/{job_id}")
     def job_detail(job_id: str):
@@ -630,10 +707,12 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
         """投递预演：只打开岗位页看按钮在不在，不点、不发。"""
         from ..services.probe import probe_apply
 
-        if tasks.running:
-            return JSONResponse(status_code=409, content={"error": "有任务正在跑，先等它结束再预演"})
-
         def build(ctx: ServiceContext):
+            # 预演会在该岗位的平台上开页面：只和占着同一平台的任务冲突（不同平台可以同时跑）
+            job = ctx.repo.get_job(job_id)
+            if job is not None and job.platform in tasks.running_platforms():
+                name = readable.platform_name(job.platform)
+                return JSONResponse(status_code=409, content={"error": f"{name} 有任务正在跑，先等它结束再预演"})
             result = probe_apply(ctx, job_id)
             if result.get("error"):
                 return JSONResponse(status_code=409, content=result)
@@ -700,17 +779,50 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
             return JSONResponse(status_code=409, content={"error": str(exc)})
         return task.snapshot()
 
+    async def _task_id(request: Request, id: str = "") -> str:
+        """停止 / 暂停 / 继续可以只针对一个任务：body {"id": ...} 或 ?id=...；都没有 = 所有在跑的任务。"""
+        if id:
+            return id
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - 老界面不带 body
+            return ""
+        return str(body.get("id") or "") if isinstance(body, dict) else ""
+
+    def _control(action: Callable[[str | None], dict], task_id: str):
+        try:
+            return action(task_id or None)
+        except KeyError:
+            return JSONResponse(status_code=404, content={"error": "没有这个任务（可能已经跑完很久、被清出列表了）"})
+
     @app.post("/api/tasks/stop")
-    def stop_task():
-        return tasks.stop()
+    async def stop_task(request: Request, id: str = ""):
+        return _control(tasks.stop, await _task_id(request, id))
 
     @app.post("/api/tasks/pause")
-    def pause_task():
-        return tasks.pause()
+    async def pause_task(request: Request, id: str = ""):
+        return _control(tasks.pause, await _task_id(request, id))
 
     @app.post("/api/tasks/resume")
-    def resume_task():
-        return tasks.resume()
+    async def resume_task(request: Request, id: str = ""):
+        return _control(tasks.resume, await _task_id(request, id))
+
+    @app.post("/api/risk/resume")
+    def risk_resume(body: RiskResumeBody):
+        """「我已处理，继续」：你在调试浏览器里过了验证 / 重新登录后点它。只解验证码锁和掉登录提醒，降速保留。
+
+        不会自动重跑任务：解除后由你决定要不要重新采集 / 投递。
+        """
+        if registry.get(body.platform) is None:
+            return JSONResponse(status_code=404, content={"error": f"没有 {body.platform} 的平台驱动"})
+
+        def run(ctx: ServiceContext):
+            ok, message = attention.resume(ctx.repo, ctx.policy, body.platform)
+            if not ok:
+                return JSONResponse(status_code=409, content={"error": message})
+            return {"ok": True, "platform": body.platform, "message": message}
+
+        return with_ctx(run)
 
     @app.get("/api/config")
     def get_config():
@@ -799,6 +911,25 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 else:
                     counts["inside"] += 1
             return counts
+
+        return with_ctx(build)
+
+    @app.get("/api/trends")
+    def trends(days: int = 14):
+        """概览「趋势」卡片：近 N 天每天采集 / 投递多少（按平台分）。ctx 是当前账号的，数据自然按账号分开。
+
+        days <= 1 = 「今天」：按天只有一个点没法看，改成今天每小时一桶（unit='hour'）。
+        """
+        days = max(1, min(90, days))   # 夹到 1..90：再长柱子就挤成线了，也免得一次扫太多行
+        unit = "hour" if days == 1 else "day"
+
+        def build(ctx: ServiceContext):
+            rows = ctx.repo.hourly_counts() if unit == "hour" else ctx.repo.daily_counts(days)
+            # 平台顺序固定按注册表来，颜色才不会每次刷新乱跳；库里出现的其他平台（如 other）排最后
+            order = list(registry.keys())
+            seen = {p for r in rows for part in ("collected", "applied") for p in r[part]}
+            platforms = order + sorted(seen - set(order))
+            return {"days": rows, "unit": unit, "platforms": platforms, "daily_limit": ctx.config.apply.daily_limit}
 
         return with_ctx(build)
 
@@ -964,4 +1095,11 @@ def run_server(host: str = "127.0.0.1", port: int = 8700, idle_shutdown_minutes:
                 return
 
     threading.Thread(target=watchdog, daemon=True).start()
-    server.run()
+    scheduler = getattr(app.state, "auto_monitor", None)
+    if scheduler is not None:
+        scheduler.start()        # 自动监测：只在真的起看板时启动（见 create_app）
+    try:
+        server.run()
+    finally:
+        if scheduler is not None:
+            scheduler.stop()

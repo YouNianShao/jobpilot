@@ -55,6 +55,16 @@ export const GROUPS = [
     switches: [['confirm.required', '人工确认门：投递前必须我点确认']],
   },
   {
+    title: '监测（HR 回复）', icon: 'chat',
+    note: '在下面的时段里，每隔一段时间自动「检查一次」：BOSS 读聊天列表，其他平台读「我的投递」，'
+        + '只读文字、不点岗位、不进会话。每次检查会用掉一点「每日监测页预算」（风控分组里）；有任务在跑时会等它结束再查。',
+    fields: [
+      ['monitor.interval_minutes', '每隔多久检查一次', 'interval'],
+      ['monitor.working_hours', '自动检查的时段', 'windows-str'],
+    ],
+    switches: [['monitor.auto', '自动监测 HR 回复']],
+  },
+  {
     title: '风控（第一优先级）', icon: 'shield', danger: true,
     note: '这一组每个数字都是一道闸门。开页面间隔是平台识别机器人最主要的特征，不建议低于 2.5 秒；'
         + '页面预算按"每开一次页面记一次"计，用完当天就自动停手。'
@@ -72,6 +82,8 @@ export const GROUPS = [
       ['safety.cross_platform_risk_platforms', '跨平台联动熔断(24h内几个平台中招就整体停，0=关)', 'number'],
       ['safety.max_consecutive_page_failures', '连续失败熔断阈值', 'number'],
       ['safety.recollect_after_hours', '同一页多少小时内不重复采(0=每次，按页记账)', 'number'],
+      ['safety.stop_after_empty_pages', '连续几页没有新岗位就换下一个组合(0=翻满)', 'number'],
+      ['safety.full_recrawl_days', '每隔几天完整翻一次(0=每次都翻满)', 'number'],
       ['safety.max_pages_per_10min', '近10分钟页面上限(0=不限)', 'number'],
       ['safety.max_pages_per_hour', '每小时页面上限(0=不限)', 'number'],
       ['safety.rate_wait_max_seconds', '超速时最多自动等多久(秒)', 'number'],
@@ -144,7 +156,7 @@ function fieldProblem(path, raw, type) {
     if (rule.min !== undefined && (rule.exclusive_min ? num <= rule.min : num < rule.min)) return '不能小于 ' + rule.min;
     if (rule.max !== undefined && (rule.exclusive_max ? num >= rule.max : num > rule.max)) return '不能大于 ' + rule.max;
   }
-  if (path === 'safety.send_windows' || path === 'safety.active_windows') {
+  if (path === 'safety.send_windows' || path === 'safety.active_windows' || path === 'monitor.working_hours') {
     const bad = splitList(value).find((item) => !WINDOW_RE.test(item));
     if (bad) return '「' + bad + '」不是 HH:MM-HH:MM 格式，例如 08:00-22:00';
   }
@@ -251,7 +263,8 @@ export function readNatures(path) {
 
 export function configField(path, label, type, value, wide) {
   if (type === 'provider') return providerField(path, label, value);
-  if (type === 'windows') return windowsField(path, label, value);
+  if (type === 'windows' || type === 'windows-str') return windowsField(path, label, value);
+  if (type === 'interval') return intervalField(path, label, value);
   if (type === 'salary') return salaryField(label);
   if (type === 'natures') return naturesField(path, label, value);
   // 'list' 是我们自己的字段类型，不是合法的 <input type>：写进去浏览器会退回原生样式，一律落成 text
@@ -325,10 +338,22 @@ function timeSelect(value, { end, label }) {
   return select;
 }
 
+/* 监测间隔：下拉选，常用的几个；配置里存了别的数（手改过 yaml）也保留成一个选项 */
+const INTERVALS = [30, 60, 90, 120];
+function intervalField(path, label, value) {
+  const select = el('select', { class: 'select', id: 'cfg::' + path });
+  const current = Number(value) || 60;
+  const opts = INTERVALS.includes(current) ? INTERVALS : [...INTERVALS, current].sort((a, b) => a - b);
+  for (const n of opts) select.appendChild(el('option', { value: String(n), text: n + ' 分钟' }));
+  select.value = String(current);
+  return el('label', { class: 'field' }, [el('span', { class: 'field-meta' }, [el('span', { class: 'label', text: label })]), select]);
+}
+
 function windowsField(path, label, value) {
   const hidden = el('input', { type: 'hidden', id: 'cfg::' + path });
   const list = el('div', { class: 'win-list' });
-  const empty = el('div', { class: 'win-empty muted small', text: path === 'safety.active_windows' ? '不限时段：全天都可以开页面' : '没有设时段：全天都可以投递' });
+  const empty = el('div', { class: 'win-empty muted small', text: path === 'safety.active_windows' ? '不限时段：全天都可以开页面'
+    : (path === 'monitor.working_hours' ? '没有设时段：全天都会自动检查' : '没有设时段：全天都可以投递') });
   const addBtn = el('button', { class: 'link small', type: 'button', text: '+ 加一段' });
   const sync = () => {
     const parts = Array.from(list.querySelectorAll('.win-row')).map((row) => {

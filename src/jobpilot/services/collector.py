@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..models import LoginRequired, PageReadError, PlatformRisk
 from ..platforms import build_default_registry, supports
+from ..safety import attention
 from ..safety.policy import Denied
 from .context import ServiceContext
 
@@ -47,8 +48,11 @@ def collect(ctx: ServiceContext, platform: str, *, registry=None,
     except PlatformRisk as exc:
         until = ctx.policy.record_risk(platform, exc.kind, exc.detail)
         ctx.repo.add_event(None, "risk", f"{platform} {exc.kind}")
+        # 验证码：页面留在调试浏览器里、切到前台，看板马上提醒你（不等任务结束）
+        attention.flag(ctx.repo, platform, exc, browser)
         return {"platform": platform, "blocked": exc.kind, "locked_until": until, "error": str(exc)}
     except LoginRequired as exc:
+        attention.flag(ctx.repo, platform, exc, browser)
         return {"platform": platform, "login_required": True, "error": str(exc)}
     except PageReadError as exc:
         # 页面读不到预期内容：计数，连续超阈值自动锁平台（fail-closed）
@@ -67,12 +71,18 @@ def collect(ctx: ServiceContext, platform: str, *, registry=None,
         browser.close()
 
     ctx.policy.record_page_success(platform)
+    attention.clear(ctx.repo, platform)   # 页面都正常打开了：之前的「待你处理」已经过去了
     ctx.policy.note_collect_done(platform)  # 采完 → 投递要冷却一段随机时间
     ctx.repo.add_event(None, "collect", f"{platform} new={result.new} seen={result.seen} dup={result.duplicate} filtered={result.filtered} skipped={result.skipped}")
     payload = {
         "platform": platform, "new": result.new, "seen": result.seen,
         "duplicate": result.duplicate, "filtered": result.filtered, "stopped": result.stopped,
+        # 翻页省预算：提前结束的组合数 / 少翻的页数 / 每个组合的新岗位率（看哪个组合该换词）
+        "early_stopped": result.early_stopped, "pages_saved": result.pages_saved,
+        "slots": list(result.slots),
     }
+    if result.early_stopped or result.pages_saved:
+        ctx.log(f"[{platform}] 有 {result.early_stopped} 个组合提前结束，这次少翻了 {result.pages_saved} 页")
     if overrides:
         payload["options"] = overrides      # 让界面 / 日志能回放这次用的参数
     return payload

@@ -1,12 +1,13 @@
 import { get, post } from './api.js';
 import {
-  alertDialog, clear, confirmDialog, el, empty, fmtTime, icon, meter, progress, remainTone, renderPager,
-  skeleton, toast, withLoading,
+  alertDialog, clear, confirmDialog, el, empty, fmtTime, icon, loadPageSize, meter, progress, remainTone,
+  renderPager, savePageSize, skeleton, toast, withLoading,
 } from './ui.js';
 import { STATUS_LABEL, isApplied, modeName, openJobUrl, platformName } from './common.js';
-import { askPermissionOnce, watchTask } from './notify.js';
+import { askPermissionOnce, watchAttention, watchTasks } from './notify.js';
 import { $, state } from './store.js';
 import { binAction, initJobs, isBin, loadJobs, refreshJobsQuietly, setStatusFilter, toggleBin } from './views/jobs.js';
+import { refreshTrends } from './views/trends.js';
 
 const VIEW_TITLES = { overview: '概览', jobs: '岗位池', monitor: '监测', activity: '记录', config: '配置' };
 /* 岗位时间线里的事件名：数据库里是英文代号，界面上一律中文 */
@@ -25,8 +26,6 @@ const STAGES = ['collect_search', 'collect_detail', 'apply', 'monitor'];
 
 const platformInfo = (platform) => ((state.status && state.status.platforms) || {})[platform] || {};
 const natureLabel = (key) => ((state.status && state.status.nature_labels) || {})[key] || key;
-const poolTotal = (counts) => (counts.new || 0) + (counts.pending_confirm || 0)
-  + (counts.approved || 0) + (counts.applied || 0);
 
 /* ---------------- 顶部/侧栏 ---------------- */
 function setTheme(theme) {
@@ -43,7 +42,7 @@ function switchView(name) {
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('is-active', v.dataset.view === name));
   $('crumb').textContent = VIEW_TITLES[name] || name;
   if (name === 'jobs') loadJobs();
-  if (name === 'monitor') { loadFollowUps(); loadInteractions(); }
+  if (name === 'monitor') { state.monitorAt = Date.now(); loadFollowUps(); loadInteractions(); loadMonitorSchedule(); }
   if (name === 'activity') loadActivity();
   if (name === 'config') loadConfig();
 }
@@ -57,36 +56,45 @@ function renderPipeline(status) {
   const box = $('kpis');
   clear(box);
   const counts = status.counts || {};
-  const running = !!status.running;
+  // 不同平台的任务能同时跑：按钮只看「这一步要用的平台 / AI 忙不忙」，不再一跑任务就全禁用
+  const tasks = taskList(status);
+  const busy = busyPlatforms(status, tasks);
+  const legacy = !!status.running && !Array.isArray(status.busy_platforms);
+  const busyApply = applyPlatforms().map(([key]) => key).filter((key) => busy.has(key));
+  const blockers = {
+    // 「所有平台轮流投」：有能投的平台在跑就先不让点，简单可预期；提示里写明是哪个
+    apply: (legacy || busyApply.length) ? (busyApply.map(platformName).join('、') || '有任务') + ' 正在跑任务' : '',
+  };
   const applied = status.applied_today ?? 0;
   const limit = status.daily_limit ?? 30;
-  const total = status.pool_total ?? poolTotal(counts);
   const fresh = counts.new || 0;
   const pending = counts.pending_confirm || 0;
   const approved = counts.approved || 0;
   const usedPct = limit ? Math.min(100, (applied / limit) * 100) : 0;
+  /* 2026-10-20 去重：「采集 601」和趋势的「近 N 天采集」看着像一回事，挪到趋势里；
+     评分 / 采集按钮顶栏已有（顶栏评分本来就是所有平台），这里不再放第二份。
+     「投递」留着：它是「所有平台轮流投」，顶栏的投递只投选中的那个平台，不重复 */
   const steps = [
     {
-      n: 1, label: '采集', value: total, unit: '个岗位', filter: '',
-      sub: total ? '岗位池里一共这么多（各状态都算）' : '还没有岗位：先按配置里的关键词和城市采一轮',
-      action: ['采集', () => runTask('collect')], now: !total,
-    },
-    {
-      n: 2, label: '待评分', value: fresh, unit: '个', filter: 'new',
+      n: 1, label: '待评分', value: fresh, unit: '个', filter: 'new',
       sub: fresh ? '评分过阈值的进「待确认」，没过的不会被投递' : '没有待评分的岗位',
-      action: fresh ? ['评分', () => runTask('score')] : null, now: !!fresh,
+      now: !!fresh,
     },
     {
-      n: 3, label: '待确认', value: pending, unit: '个', filter: 'pending_confirm',
+      n: 2, label: '待确认', value: pending, unit: '个', filter: 'pending_confirm',
       sub: pending ? '你确认之后才会投递，这是最后一道人工闸门' : '没有在等你确认的岗位',
       action: pending ? ['去确认', () => $('pending').scrollIntoView({ behavior: 'smooth', block: 'start' })] : null,
       now: !!pending && !fresh, local: true,
     },
     {
-      n: 4, label: '今日投递', value: applied, unit: '/ ' + limit, filter: 'approved', pct: usedPct,
-      sub: approved ? (approved + ' 个已确认，等着投递') : (applied >= limit ? '已到今天的上限' : '还能投 ' + (limit - applied) + ' 个'),
-      // 概览上的「投递」= 所有能投的平台轮流投（顶栏的「投递」仍只投顶栏选的那个平台）
+      n: 3, label: '已确认待投', value: approved, unit: '个', filter: 'approved',
+      sub: approved ? '在能自动投递的平台里轮流投' : '没有已确认、等着投的岗位',
       action: approved ? ['投递', () => runTask('apply', { all: true })] : null, now: !!approved && !pending && !fresh,
+      block: blockers.apply,
+    },
+    {
+      n: 4, label: '今日已投', value: applied, unit: '/ ' + limit, filter: 'applied', pct: usedPct,
+      sub: applied >= limit ? '已到今天的上限' : '今天还能投 ' + (limit - applied) + ' 个',
     },
   ];
   for (const step of steps) {
@@ -101,18 +109,99 @@ function renderPipeline(status) {
     if (step.action) {
       card.appendChild(el('button', {
         class: 'btn small' + (step.now ? ' primary' : ''), type: 'button', text: step.action[0],
-        disabled: running && !step.local, onclick: step.action[1],
+        disabled: !!step.block, title: step.block || null, onclick: step.action[1],
       }));
     }
     box.appendChild(card);
   }
 }
 /* ---------------- 概览：风控仪表 ----------------
-   为什么重做：以前每个平台摊开 6 条进度条 + 页脚 + 锁提示，4 个平台就是一面绿条墙，
-   最该一眼看清的「现在能不能干活、还差多少到上限」反而埋在最里面。
-   现在每个平台先给一行结论 + 三格关键数字，明细折叠在后面（点平台名展开）。 */
+   布局 C（2026-10-16）：风控卡片占满一行，4 个平台并排成 4 张小卡 —— 横向一眼比较哪个平台快到上限。
+   每张小卡只放结论：能不能开页 + 三格关键数字 + 降速 / 冷却提示。
+   明细（四项额度 + 两个速率窗口）只有一条，展开在小卡下面，用小三角指着是哪个平台的。 */
+function riskTight(remain, limits) {
+  // 最紧的一项：所有额度里剩余比例最小的那个 —— 它就是最先卡住你的闸门
+  let tight = null;
+  for (const stage of STAGES) {
+    const value = remain[stage];
+    const limit = limits[stage];
+    if (value === undefined || value === null || value < 0 || !limit) continue;
+    const pct = (value / limit) * 100;
+    if (!tight || pct < tight.pct) tight = { stage, value, limit, pct };
+  }
+  return tight;
+}
+
+function riskMeterRow(label, value, limit, usedText) {
+  const unlimited = value === undefined || value === null || value < 0 || !limit;
+  const pct = unlimited ? 100 : (value / limit) * 100;
+  return el('div', { class: 'mrow' }, [
+    el('span', { text: label }),
+    unlimited ? el('div', { class: 'meter' }) : meter(pct, remainTone(pct)),
+    el('b', { text: unlimited ? '不限' : usedText }),
+  ]);
+}
+
+/* 明细条：左边说明，中间四项额度，右边两个速率窗口 */
+function riskDetail(key, info, limits, safety) {
+  const remain = info.remaining || {};
+  const stageRows = el('div', { class: 'mrows' });
+  for (const stage of STAGES) {
+    const value = remain[stage];
+    const limit = limits[stage];
+    stageRows.appendChild(riskMeterRow(STAGE_LABEL[stage], value, limit, value + (limit ? ' / ' + limit : '')));
+  }
+  const rateRows = el('div', { class: 'mrows rate' });
+  for (const [rk, label] of [['per_10min', '近10分钟'], ['per_hour', '近1小时']]) {
+    const row = (info.rate || {})[rk];
+    if (!row) continue;
+    const limit = Number(row.limit) || 0;
+    rateRows.appendChild(riskMeterRow(label, limit > 0 ? row.remaining : -1, limit, (row.used || 0) + ' / ' + limit));
+  }
+  if (!rateRows.childElementCount) rateRows.appendChild(el('div', { class: 'muted small', text: '这个平台没有速率窗口' }));
+  const fuse = safety ? safety.max_consecutive_page_failures : null;
+  const intro = el('div', { class: 'rdet-intro' }, [
+    el('b', { text: (info.name || key) + ' · 明细' }),
+    el('div', { class: 'muted small', text: '条越短剩得越少；任何一项用完，这个平台今天就不再开对应的页面。' }),
+    (fuse !== null && fuse !== undefined)
+      ? el('div', { class: 'muted small', text: '页面连续失败 ' + fuse + ' 次会暂停该平台' }) : null,
+  ]);
+  return el('div', { class: 'rdet', id: 'riskDetail', role: 'region', 'aria-label': (info.name || key) + ' 风控明细' }, [
+    intro,
+    el('div', { class: 'rdet-col' }, [el('div', { class: 'rdet-h', text: '今日额度（剩余）' }), stageRows]),
+    el('div', { class: 'rdet-col' }, [el('div', { class: 'rdet-h', text: '速率窗口（已用）' }), rateRows]),
+  ]);
+}
+
+/* 遇到验证 / 掉登录时挂在小卡下面：你在调试浏览器里处理完，点「我已处理，继续」解除冷却（降速保留）。
+   限流 / 封禁 / 整体冷却后端会拒绝（409），原因原样告诉你。解除后不自动重跑，由你决定。 */
+function attentionBox(key, info, need) {
+  const name = info.name || platformName(key);
+  const what = need.kind === 'login' ? '登录已失效，请在调试浏览器里重新登录' : '出现了验证（滑块 / 验证码），请在调试浏览器里完成';
+  const button = el('button', {
+    class: 'btn small primary', type: 'button', text: '我已处理，继续',
+    title: '解除这次验证造成的冷却（降速保留）。之后可以重新开始这个平台的任务',
+    onclick: () => withLoading(button, async () => {
+      const res = await post('/api/risk/resume', { platform: key });
+      if (res.error) { await alertDialog('还不能继续', res.error, 'warn'); return; }
+      toast(name + '：' + (res.message || '已解除，可以重新开始这个平台的任务'), 'ok', {
+        action: '重新采集', onAction: () => { setPlatform(key); runTask('collect'); },
+      });
+      await refresh();
+    }),
+  });
+  // 不加 role=alert：这块每 2 秒重画一次，读屏会反复念；出现那一下已经有 toast（role=status）播报过
+  return el('div', { class: 'rtile-attn' }, [
+    el('span', { class: 'lock' }, [icon('alert'), name + what + (need.url ? '（那一页留在调试浏览器里没关）' : '')]),
+    button,
+  ]);
+}
+
 function renderRisk(status) {
   const box = $('risk');
+  // 每 2 秒轮询都会重画：重画前焦点在哪张小卡上，重画后还放回去（键盘用户不会被甩回页首）
+  const focusKey = document.activeElement && box.contains(document.activeElement)
+    ? document.activeElement.getAttribute('data-risk-key') : null;
   clear(box);
   const platforms = status.platforms || {};
   const locks = status.locks || {};
@@ -120,129 +209,198 @@ function renderRisk(status) {
   const safety = state.config && state.config.safety ? state.config.safety : null;
   const windowOpen = status.active_window_open !== false;
   $('riskHint').textContent = windowOpen
-    ? '点平台名展开明细'
+    ? '点平台切换明细'
     : '不在活跃时段 ' + ((status.active_windows || []).join('、') || '') + '：不会开页面';
   if (!keys.length) { box.appendChild(empty('没有可用平台', '检查 config.yaml 的 platforms 配置')); return; }
 
-  if (!state.riskOpen) state.riskOpen = {};
+  /* 手风琴（2026-10-20）：同一时间展开一个平台的明细，其余平台收成一行留在下面，点哪行就切到哪个。
+     记住上次展开的是哪个；从没选过就展开额度最紧的那个。'-' = 你点过「收起」，四行都收着。
+     出了要你处理的事（验证 / 掉登录 / 冷却 / 降速）那个平台自动展开，你点开别的就听你的 */
+  if (state.riskOpenKey === undefined) {
+    try { state.riskOpenKey = localStorage.getItem('jp.riskOpen') || ''; } catch (e) { state.riskOpenKey = ''; }
+  }
+  if (state.riskOpenKey && state.riskOpenKey !== '-' && !platforms[state.riskOpenKey]) state.riskOpenKey = '';
+  const urgent = keys.find((k) => (status.attention || []).some((a) => a.platform === k)) || keys.find((k) => locks[k]);
+  if (urgent && urgent !== state.riskUrgentSeen) { state.riskOpenKey = urgent; state.riskUrgentSeen = urgent; }
+  if (!urgent) state.riskUrgentSeen = '';
+  if (!state.riskOpenKey) {
+    const tightest = keys.map((k) => [k, riskTight(platforms[k].remaining || {}, platforms[k].limits || (safety ? safety.daily_pages : null) || {})])
+      .filter(([, t]) => t).sort((a, b) => a[1].pct - b[1].pct)[0];
+    state.riskOpenKey = (keys.find((k) => platforms[k].penalty) || (tightest && tightest[0]) || keys[0]);
+  }
+  const openKey = state.riskOpenKey === '-' ? '' : state.riskOpenKey;
+  const busy = new Set(status.busy_platforms || []);
+
+  const grid = el('div', { class: 'rtiles' });
   for (const key of keys) {
     const info = platforms[key];
     const remain = info.remaining || {};
     const limits = info.limits || (safety ? safety.daily_pages : null) || {};
     const nextIn = info.next_open_in || 0;
     state.nextOpen[key] = { base: nextIn, at: Date.now() };
-    const expanded = state.riskOpen[key] === true;
     const lock = locks[key];
-
-    // 最紧的一项：所有额度里剩余比例最小的那个 —— 它就是最先卡住你的闸门
-    let tight = null;
-    for (const stage of STAGES) {
-      const value = remain[stage];
-      const limit = limits[stage];
-      if (value === undefined || value === null || value < 0 || !limit) continue;
-      const pct = (value / limit) * 100;
-      if (!tight || pct < tight.pct) tight = { stage, value, limit, pct };
-    }
+    const tight = riskTight(remain, limits);
     const tone = lock ? 'bad' : (info.penalty ? 'warn' : (tight && tight.pct <= 15 ? 'warn' : 'ok'));
     const hour = (info.rate && info.rate.per_hour) || null;
+    const open = key === openKey;
 
-    const item = el('div', { class: 'psafe' + (expanded ? ' is-open' : '') });
-    item.appendChild(el('button', {
-      class: 'psafe-head', type: 'button',
-      onclick: () => {
-        state.riskOpen[key] = !state.riskOpen[key];
-        item.classList.toggle('is-open', state.riskOpen[key]);
+    const tile = el('button', {
+      class: 'rtile' + (open ? ' is-open' : ''), type: 'button',
+      'aria-expanded': open ? 'true' : 'false', 'aria-controls': 'riskDetail',
+      title: open ? '收起明细' : '展开 ' + (info.name || key) + ' 的明细',
+      onclick: () => setRiskOpen(open ? '-' : key, status),
+      onkeydown: (ev) => {
+        // 上下方向键在平台之间切换明细；Esc 收起
+        if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+        ev.preventDefault();
+        const next = keys[(keys.indexOf(key) + (ev.key === 'ArrowDown' ? 1 : keys.length - 1)) % keys.length];
+        setRiskOpen(next, status);
       },
-    }, [
+    });
+    tile.setAttribute('data-risk-key', key);
+    tile.appendChild(el('span', { class: 'rtile-head' }, [
       el('span', { class: 'status-dot t-' + tone }),
       el('b', { text: info.name || key }),
       el('span', { class: 'pill', text: (info.capabilities || []).map((c) => CAP_LABEL[c] || c).join(' · ') || '—' }),
-      el('span', {
-        class: 'psafe-next' + (nextIn > 0 ? '' : ' is-live'),
-        'data-next-open': key,
-        text: nextIn > 0 ? ('最快 ' + Math.ceil(nextIn) + ' 秒后开页') : '现在就能开页',
-      }),
-      icon('chev', 'chev'),
+      busy.has(key) ? el('span', { class: 'pill live', text: '跑任务中' }) : null,
     ]));
-
-    item.appendChild(el('div', { class: 'psafe-sum' }, [
-      el('div', { class: 'kv' }, [el('span', { text: '今日可投' }), el('b', { text: String(remain.daily_limit ?? '—') })]),
-      el('div', { class: 'kv' }, [
+    tile.appendChild(el('span', {
+      class: 'psafe-next' + (nextIn > 0 ? '' : ' is-live'),
+      'data-next-open': key,
+      text: nextIn > 0 ? ('最快 ' + Math.ceil(nextIn) + ' 秒后开页') : '现在就能开页',
+    }));
+    tile.appendChild(el('span', { class: 'psafe-sum' }, [
+      el('span', { class: 'kv' }, [el('span', { text: '今日可投' }), el('b', { text: String(remain.daily_limit ?? '—') })]),
+      el('span', { class: 'kv' }, [
         el('span', { text: tight ? STAGE_LABEL[tight.stage] : '额度' }),
-        el('b', {
-          class: tight && tight.pct <= 15 ? 'bad' : '',
-          text: tight ? (tight.value + ' / ' + tight.limit) : '—',
-        }),
+        el('b', { class: tight && tight.pct <= 15 ? 'bad' : '', text: tight ? (tight.value + ' / ' + tight.limit) : '—' }),
       ]),
-      el('div', { class: 'kv' }, [
+      el('span', { class: 'kv' }, [
         el('span', { text: '近 1 小时' }),
         el('b', { text: hour ? ((hour.used || 0) + ' / ' + (hour.limit || '—')) : '不限' }),
       ]),
     ]));
-
-    const detail = el('div', { class: 'psafe-body' });
-    const stageRows = el('div', { class: 'mrows' });
-    for (const stage of STAGES) {
-      const value = remain[stage];
-      const limit = limits[stage];
-      const unlimited = value === undefined || value < 0;
-      const pct = (!unlimited && limit) ? (value / limit) * 100 : 100;
-      stageRows.appendChild(el('div', { class: 'mrow' }, [
-        el('span', { text: STAGE_LABEL[stage] }),
-        unlimited ? el('div', { class: 'meter' }) : meter(pct, remainTone(pct)),
-        el('b', { text: unlimited ? '不限' : (value + (limit ? ' / ' + limit : '')) }),
-      ]));
+    // 收起时也能一眼比较四个平台：四项今日额度各一根迷你条（剩多少），展开后看具体数字
+    if (!open) {
+      tile.appendChild(el('span', { class: 'rtile-mini', 'aria-hidden': 'true' }, STAGES.map((stage) => {
+        const value = remain[stage];
+        const limit = limits[stage];
+        const pct = limit && value !== undefined && value !== null && value >= 0 ? Math.max(0, Math.min(100, (value / limit) * 100)) : null;
+        return el('span', { class: 'rmini', title: STAGE_LABEL[stage] + (pct === null ? '：不限' : '：剩 ' + value + ' / ' + limit) }, [
+          el('span', { text: STAGE_LABEL[stage].replace('页', '') }),
+          pct === null ? el('i', { class: 'rmini-bar' }) : el('i', { class: 'rmini-bar t-' + remainTone(pct) }, [el('b', { style: 'width:' + pct + '%' })]),
+        ]);
+      })));
     }
-    detail.appendChild(stageRows);
-
-    const rateRows = el('div', { class: 'mrows rate' });
-    for (const [rk, label] of [['per_10min', '近10分钟'], ['per_hour', '近1小时']]) {
-      const row = (info.rate || {})[rk];
-      if (!row) continue;
-      const limit = Number(row.limit) || 0;
-      const unlimited = limit <= 0;
-      const pct = unlimited ? 100 : (row.remaining / limit) * 100;
-      rateRows.appendChild(el('div', { class: 'mrow' }, [
-        el('span', { text: label }),
-        unlimited ? el('div', { class: 'meter' }) : meter(pct, remainTone(pct)),
-        el('b', { text: unlimited ? '不限' : (row.used + ' / ' + limit) }),
-      ]));
-    }
-    if (rateRows.childElementCount) detail.appendChild(rateRows);
-
-    const fuse = safety ? safety.max_consecutive_page_failures : null;
-    if (fuse !== null && fuse !== undefined) {   // 「今日可投」上面摘要里已经有了，这里不再重复
-      detail.appendChild(el('div', { class: 'psafe-foot' }, [el('span', { text: '页面连续失败 ' + fuse + ' 次会暂停该平台' })]));
-    }
-    item.appendChild(detail);
-
     if (info.penalty) {
-      item.appendChild(el('div', { class: 'lock warn' }, [
+      tile.appendChild(el('span', { class: 'lock warn' }, [
         icon('alert'),
         '命中过风控，已降速 ×' + info.penalty.factor + '（还有 ' + info.penalty.remaining_minutes + ' 分钟）',
       ]));
     }
     if (lock) {
-      item.appendChild(el('div', { class: 'lock' }, [
+      tile.appendChild(el('span', { class: 'lock' }, [
         icon('alert'), '冷却中：' + (lock.kind || '风控') + '，约 ' + (lock.remaining_minutes ?? '-') + ' 分钟',
       ]));
     }
-    box.appendChild(item);
+    const need = (status.attention || []).find((item) => item.platform === key);
+    tile.appendChild(el('span', { class: 'rtile-chev', 'aria-hidden': 'true', text: open ? '▴' : '▾' }));
+    // 小卡本身是个按钮（点了切换明细），按钮里不能再套按钮：有待处理时包一层，把「我已处理」放在小卡下面
+    const item = el('div', { class: 'racc' + (open ? ' is-open' : '') + (need ? ' is-need' : '') }, [tile]);
+    if (need) item.appendChild(attentionBox(key, info, need));
+    if (open) item.appendChild(riskDetail(key, info, limits, safety));
+    grid.appendChild(item);
+  }
+  box.appendChild(grid);
+  box.classList.toggle('is-detail', !!openKey);
+  if (focusKey) {
+    const again = grid.querySelector('[data-risk-key="' + focusKey + '"]');
+    if (again) again.focus();
   }
 }
 
-
+function setRiskOpen(key, status) {
+  state.riskOpenKey = key;
+  try { localStorage.setItem('jp.riskOpen', key); } catch (e) { /* 隐私模式存不了就不记 */ }
+  renderRisk(state.status || status);
+  const again = $('risk').querySelector('[data-risk-key="' + (key === '-' ? '' : key) + '"]')
+    || document.activeElement;
+  if (again && again.focus) again.focus();
+}
 
 /* ---------------- 概览：待确认 ---------------- */
+/* 投递队列（2026-10-20）：待确认 / 已确认待投 / 今日已投 三栏。没有待确认时可以看另外两栏，
+   卡片不再只剩一个空图标。默认打开第一个有内容的栏；你点过哪栏就停在哪栏（那栏空了再自动换） */
+const QUEUE_TABS = ['pending', 'approved', 'applied'];
+function queueCounts(status) {
+  const counts = status.counts || {};
+  return { pending: counts.pending_confirm || (status.pending_confirm || []).length, approved: counts.approved || 0,
+    applied: status.applied_today ?? 0 };
+}
+function renderQueueTabs(status) {
+  const n = queueCounts(status);
+  $('qnPending').textContent = n.pending; $('qnApproved').textContent = n.approved; $('qnApplied').textContent = n.applied;
+  if (!state.queueTab || (!n[state.queueTab] && !state.queuePinned)) state.queueTab = QUEUE_TABS.find((k) => n[k]) || 'pending';
+  for (const btn of $('queueTabs').querySelectorAll('[data-q]')) {
+    const on = btn.dataset.q === state.queueTab;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  const pendingTab = state.queueTab === 'pending';
+  $('btnConfirmAll').hidden = !pendingTab; $('btnRejectAll').hidden = !pendingTab;
+  return n;
+}
+/* 已确认待投 / 今日已投：从岗位池接口拉（服务端按状态筛），最多 30 秒拉一次，换栏立刻拉 */
+async function loadQueueList(tab) {
+  const status = tab === 'approved' ? 'approved' : 'applied';
+  const url = '/api/jobs?page=1&limit=50&status=' + status + '&sort=' + (tab === 'applied' ? 'updated' : 'score') + '&dir=desc';
+  const data = await get(url);
+  if (!data || data.error) return;
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const items = (data.items || []).filter((j) => tab !== 'applied' || String(j.updated_at || '').startsWith(today));
+  state.queueLists = { ...(state.queueLists || {}), [tab]: { items, at: Date.now() } };
+  if (state.queueTab === tab && state.status) renderPending(state.status);
+}
+function queueRow(job, tab) {
+  return el('div', { class: 'q-row' }, [
+    el('button', { class: 'q-title', type: 'button', text: job.title || '（无标题）', title: '查看详情', onclick: () => openJob(job.id) }),
+    el('span', { class: 'q-meta muted small', text: [job.company, job.salary, platformName(job.platform)].filter(Boolean).join(' · ') }),
+    el('span', { class: 'q-tail muted small mono', text: tab === 'applied' ? String(job.updated_at || '').slice(11, 16)
+      : (job.score ?? null) !== null ? job.score + ' 分' : '' }),
+  ]);
+}
+
 function renderPending(status) {
   const list = status.pending_confirm || [];
-  const total = (status.counts && status.counts.pending_confirm) || list.length;
-  $('pendingCount').textContent = total;
+  const n = renderQueueTabs(status);
+  const total = n.pending;
   $('navJobsBadge').textContent = total ? String(total) : '';
   $('btnConfirmAll').disabled = !total;
   $('btnRejectAll').disabled = !total;
+  // 三栏都空才缩成「暂无」（窄屏时是一行横条）；classList.toggle 状态没变时不动布局，2 秒轮询不闪
+  const none = !n.pending && !n.approved && !n.applied;
+  $('pendingCard').classList.toggle('is-compact', none);
+  $('ovWork').classList.toggle('no-pending', none);
   const box = $('pending');
   clear(box);
+  if (state.queueTab !== 'pending') {
+    $('pendingPager').hidden = true;
+    const tab = state.queueTab;
+    const cached = (state.queueLists || {})[tab];
+    if (!cached || Date.now() - cached.at > 30000) loadQueueList(tab);
+    const items = cached ? cached.items : [];
+    if (!items.length) {
+      box.appendChild(empty(tab === 'approved' ? '没有已确认、等着投的岗位' : '今天还没有投出去的岗位',
+        tab === 'approved' ? '在「待确认」里确认之后会排到这里，点流水线上的「投递」就开始投' : '投递成功的岗位会按时间列在这里'));
+      return;
+    }
+    if (tab === 'approved') {
+      box.appendChild(el('div', { class: 'q-actions' }, [el('span', { class: 'muted small', text: n.approved + ' 个已确认，在能自动投递的平台里轮流投' }),
+        el('button', { class: 'btn small primary', type: 'button', text: '开始投递', onclick: () => runTask('apply', { all: true }) })]));
+    }
+    for (const job of items) box.appendChild(queueRow(job, tab));
+    return;
+  }
   if (!list.length) {
     $('pendingPager').hidden = true;
     box.appendChild(empty('暂无待确认岗位', '先跑「采集 → 评分」，通过阈值的岗位会出现在这里等你确认',
@@ -314,103 +472,514 @@ function pendingItem(job) {
   return el('div', { class: 'pending-item' }, [main, side]);
 }
 
-/* ---------------- 概览：最近任务 ---------------- */
+/* ---------------- 概览：任务 ----------------
+   2026-10-16：不同平台的任务可以同时跑（比如 51job 在采集，BOSS 在投递）。
+   status.tasks = 运行中的在前、最近结束的在后；旧后端只有 status.task，就当成只有一个。
+   每个任务一条横道（任务监控台，见下面 lane）；日志是所有任务合在一起的一条时间线。
+   没有任何任务可看时，整张卡片缩成一行横条，待确认那张占满整行。 */
 const fmtDur = (sec) => (sec < 60 ? sec + ' 秒' : Math.floor(sec / 60) + ' 分' + (sec % 60 ? ' ' + (sec % 60) + ' 秒' : ''));
 
+function taskList(status) {
+  if (Array.isArray(status.tasks)) return status.tasks.filter(Boolean);
+  return status.task ? [status.task] : [];
+}
+const taskRunning = (task) => task.status === 'running';
+// 旧后端的任务快照没有 paused：那时只有一个任务，用全局的 status.paused
+const taskPaused = (task, status) => taskRunning(task) && (task.paused ?? (!Array.isArray(status.tasks) && !!status.paused));
 
-/* ---------------- 概览：任务 ---------------- */
-function renderTask(status) {
-  const task = status.task;
+function taskPillInfo(task, status) {
+  // completed 但带 error = 跑完了却没做成（被风控锁 / 没登录 / 闸门拒绝），不能显示成绿色的「已完成」
+  const ok = task.status === 'completed' && !task.error;
+  if (taskRunning(task)) return { cls: 'live', text: taskPaused(task, status) ? '已暂停' : '运行中' };
+  if (ok) return { cls: 'ok', text: '已完成' };
+  if (task.status === 'failed') return { cls: 'bad', text: '出错' };
+  return { cls: 'warn', text: ({ completed: '没有做成', stopped: '已停止' }[task.status] || task.status || '—') };
+}
+
+/* 单个任务的暂停 / 继续 / 停止：带上 id，只动这一个 */
+async function taskAction(task, action) {
+  if (action === 'stop') {
+    const name = [taskPlatform(task), modeName(task.mode)].filter(Boolean).join(' · ');
+    if (!(await confirmDialog('停止任务', '确定要停止「' + name + '」吗？已完成的进度会保留，别的任务不受影响。'))) return;
+  }
+  const res = await post('/api/tasks/' + action, { id: task.id });
+  if (res && res.error) { toast(res.error, 'err'); return; }
+  if (action === 'stop') toast('已请求停止', 'ok');
+  refresh();
+}
+
+/* 顶栏按钮按「平台忙不忙」来禁用：别的平台在跑不影响这个平台开新任务 */
+function renderTaskButtons(status, tasks) {
   const running = !!status.running;
   $('btnStop').disabled = !running;
   $('btnPause').disabled = !running;
+  const live = tasks.filter(taskRunning);
+  // 全都暂停了才显示「继续」，否则按一下 = 全部暂停
+  const allPaused = live.length ? live.every((t) => taskPaused(t, status)) : !!status.paused;
+  $('btnPause').dataset.allPaused = allPaused ? '1' : '';
   $('btnPause').innerHTML = '';
-  $('btnPause').appendChild(icon(status.paused ? 'play' : 'pause'));
-  for (const id of ['btnFull', 'btnCollect', 'btnScore', 'btnGreet']) {
-    $(id).disabled = running;
-    $(id).classList.toggle('is-busy', running);
+  $('btnPause').appendChild(icon(allPaused ? 'play' : 'pause'));
+  $('btnPause').title = allPaused ? '继续所有已暂停的任务' : '暂停所有运行中的任务';
+  $('btnStop').title = live.length > 1 ? '停止所有运行中的任务（' + live.length + ' 个）：在安全点收手' : '停止当前任务：在安全点收手，不打断正在进行的动作（关闭页面不会停止它）';
+
+  const busy = busyPlatforms(status, tasks);
+  const platBusy = !!state.platform && busy.has(state.platform);
+  // 评分位按平台占（ai:51job）：只有「这个平台的评分 / 招呼语正在跑」才禁用顶栏的评分 / 招呼语
+  const aiBusy = live.some((t) => (t.claims || []).includes('ai:' + state.platform) || (t.claims || []).includes('ai'));
+  // 没有 busy_platforms / claims 的旧后端：一跑任务就全禁用（和以前一样）
+  const legacy = running && !Array.isArray(status.busy_platforms);
+  const busyTip = platformName(state.platform) + ' 正在跑任务，等它结束或先停止';
+  const aiTip = platformName(state.platform) + ' 的评分 / 写招呼语正在跑，等它结束；别的平台可以照常评';
+  for (const [id, off, tip] of [
+    ['btnCollect', platBusy || legacy, busyTip], ['btnApply', platBusy || legacy, busyTip],
+    ['btnScore', aiBusy || legacy, aiTip], ['btnGreet', aiBusy || legacy, aiTip],
+  ]) {
+    const btn = $(id);
+    if (btn.dataset.tip === undefined) btn.dataset.tip = btn.title;
+    if (off) { btn.disabled = true; btn.title = tip; }
+    else if (id !== 'btnApply') { btn.disabled = false; btn.title = btn.dataset.tip; }
+    btn.classList.toggle('is-busy', off);
   }
-  if (running) $('btnApply').disabled = true;
+  // 运行全流程不禁用：面板里会把正在跑的平台置灰
+  $('btnFull').disabled = legacy;
+  $('btnFull').classList.toggle('is-busy', legacy);
+}
+
+function busyPlatforms(status, tasks) {
+  if (Array.isArray(status.busy_platforms)) return new Set(status.busy_platforms);
+  // 旧后端：从运行中的任务自己推
+  const set = new Set();
+  for (const t of (tasks || taskList(status)).filter(taskRunning)) {
+    for (const p of (t.platforms && t.platforms.length ? t.platforms : String(t.platform || '').split(','))) if (p) set.add(p);
+  }
+  return set;
+}
+
+/* 任务监控台（2026-10-20）：每个任务一条横道，同时看所有在跑的任务，不用再点来点去。
+   横道 = 平台色 + 步骤条（全流程：采集 → 评分 → 招呼语 → 投递）+ 进度条 + 关键数字 + 最新一行日志。
+   下面一条日志时间线：所有任务的日志按时间排在一起，可按平台筛。 */
+const STAGE_STEPS = [['collect', '采集'], ['score', '评分'], ['greet', '招呼语'], ['apply', '投递']];
+const PLATFORM_KEYS = ['boss', '51job', 'liepin', 'zhaopin'];
+// 横道用哪个平台的颜色：单平台任务用它自己的；多平台 / 所有平台用主色
+function laneTone(task) {
+  const many = (task.platforms && task.platforms.length > 1) || String(task.platform || '').includes(',');
+  return !many && PLATFORM_KEYS.includes(task.platform) ? task.platform : 'x';
+}
+function stepper(task) {
+  const box = el('ol', { class: 'tl-steps', 'aria-label': '进行到哪一步' });
+  const order = STAGE_STEPS.map(([k]) => k);
+  // 不是全流程：只有一步，就是这个任务自己（采集 / 评分 / …）
+  const steps = task.mode === 'full' ? STAGE_STEPS : [[task.mode, modeName(task.mode)]];
+  const at = task.mode === 'full' ? order.indexOf(task.stage || 'collect') : 0;
+  const done = task.status !== 'running';
+  steps.forEach(([key, label], i) => {
+    const state = done && task.status === 'completed' && !task.error ? (i <= at ? 'done' : 'skip')
+      : (i < at ? 'done' : (i === at ? 'now' : 'todo'));
+    box.appendChild(el('li', { class: 'tl-step is-' + state, 'aria-current': state === 'now' ? 'step' : null }, [
+      el('i', { 'aria-hidden': 'true', text: state === 'done' ? '✓' : String(i + 1) }), label,
+    ]));
+  });
+  return box;
+}
+function elapsed(task) {
+  const start = parseLocal(task.started_at);
+  const end = task.finished_at ? parseLocal(task.finished_at) : Date.now();
+  if (start === null || end === null) return '';
+  const sec = Math.max(0, Math.round((end - start) / 1000));
+  const mm = Math.floor(sec / 60), ss = sec % 60;
+  return (mm >= 60 ? Math.floor(mm / 60) + ':' + String(mm % 60).padStart(2, '0') : String(mm).padStart(2, '0'))
+    + ':' + String(ss).padStart(2, '0');
+}
+
+/* 所有平台轮流投递：每个平台一条小进度条（task.lanes，见 services/applier.apply_all）。
+   等间隔 / 冷却的倒计时按后端给的到点时刻（墙上时间）算，每次重画（2 秒）刷新一次 */
+const LANE_STATE = {
+  applying: ['投递中', 'is-live'], waiting: ['等间隔', 'is-wait'], cooling: ['采集后冷却', 'is-cool'],
+  stopped: ['已停', 'is-stop'], skipped: ['没投', 'is-stop'], done: ['投完了', 'is-ok'],
+};
+function leftText(until) {
+  const sec = Math.max(0, Math.round(until - Date.now() / 1000));
+  if (!sec) return '';
+  return sec < 90 ? '还剩 ' + sec + ' 秒' : '约 ' + Math.ceil(sec / 60) + ' 分钟';
+}
+function subLanes(lanes, paused) {
+  const keys = Object.keys(lanes).sort((a, b) => {
+    const r = (k) => (PLATFORM_KEYS.includes(k) ? PLATFORM_KEYS.indexOf(k) : 99);
+    return r(a) - r(b);
+  });
+  const box = el('div', { class: 'tsubs' });
+  for (const key of keys) {
+    const ln = lanes[key] || {};
+    const [word, cls] = LANE_STATE[ln.state] || ['等待', 'is-wait'];
+    const total = ln.total || 0;
+    const pct = total ? Math.min(100, Math.round(((ln.done || 0) / total) * 100)) : 0;
+    let note = ln.state === 'applying' ? (ln.label || '')
+      : (ln.state === 'waiting' || ln.state === 'cooling') ? leftText(ln.until || 0)
+        : (ln.reason || '');
+    if (paused && (ln.state === 'applying' || ln.state === 'waiting')) note = '已暂停';
+    box.appendChild(el('div', { class: 'tsub tp-' + (PLATFORM_KEYS.includes(key) ? key : 'x') + ' ' + cls }, [
+      el('b', { class: 'tsub-name', text: platformName(key) }),
+      el('div', { class: 'tsub-bar', role: 'progressbar', 'aria-label': platformName(key) + ' 投递进度',
+        'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, [el('i', { style: 'width:' + pct + '%' })]),
+      el('span', { class: 'mono tsub-num', text: (ln.applied || 0) + ' / ' + total }),
+      el('span', { class: 'tsub-state', text: word }),
+      el('span', { class: 'tsub-note', text: note, title: note || null }),
+    ]));
+  }
+  return box;
+}
+
+function lane(task, status) {
+  const run = taskRunning(task);
+  const paused = taskPaused(task, status);
+  const info = taskPillInfo(task, status);
+  const p = task.progress || {};
+  const tone = laneTone(task);
+  const cls = 'tlane tp-' + tone + (run ? (paused ? ' is-paused' : ' is-run') : ' is-done') + (task.error ? ' is-bad' : '');
+  const node = el('div', { class: cls });
+  const head = el('div', { class: 'tlane-head' }, [
+    el('span', { class: 'tlane-dot', 'aria-hidden': 'true' }),
+    el('b', { class: 'tlane-name', text: taskPlatform(task) }),
+    el('span', { class: 'muted small', text: modeName(task.mode) }),
+    el('span', { class: 'pill ' + info.cls, text: info.text }),
+  ]);
+  const split = Object.keys(task.lanes || {}).length > 0;
+  if ((run || task.mode === 'full') && !split) head.appendChild(stepper(task));
+  head.appendChild(el('div', { class: 'grow' }));
+  head.appendChild(el('span', { class: 'tlane-clock mono', title: run ? '已用时' : '用时', text: elapsed(task) }));
+  if (run) {
+    head.appendChild(el('button', { class: 'btn ghost small', type: 'button', text: paused ? '继续' : '暂停',
+      onclick: () => taskAction(task, paused ? 'resume' : 'pause') }));
+    head.appendChild(el('button', { class: 'btn danger small', type: 'button', text: '停止',
+      title: '任务在后台运行：关掉看板页面不会停止它，要停就点这里（或右上角停止全部）',
+      onclick: () => taskAction(task, 'stop') }));
+  }
+  node.appendChild(head);
+  if (!run) {
+    // 跑完的收成一行：没做成写原因，做成了写最后一句
+    const last = (task.logs || []).slice(-1)[0];
+    // 跑完的收成一行（出错也是一行红字，悬停看全文），不再一个任务占一大块
+    const why = task.error || last || '任务已结束。';
+    node.appendChild(el('div', { class: 'small tlane-sum' + (task.error ? ' is-bad' : ' muted'), text: why, title: why }));
+    return node;
+  }
+  const pct = p.total ? Math.min(100, Math.round(((p.current || 0) / p.total) * 100)) : null;
+  node.appendChild(el('div', { class: 'tlane-bar' + (pct === null ? ' is-indet' : ''), role: 'progressbar',
+    'aria-label': taskPlatform(task) + ' 进度', 'aria-valuemin': '0', 'aria-valuemax': '100',
+    'aria-valuenow': pct === null ? null : String(pct) }, [el('i', { style: pct === null ? '' : 'width:' + pct + '%' })]));
+  const last = (task.logs || []).slice(-1)[0] || '';
+  // 分平台投递：总进度写成「已投 x / y」（正在投哪个岗位写在各平台那一行里）
+  const sums = Object.values(task.lanes || {}).reduce((a, l) => [a[0] + (l.applied || 0), a[1] + (l.total || 0)], [0, 0]);
+  node.appendChild(el('div', { class: 'tlane-foot' }, [
+    el('span', { class: 'tlane-label', text: split ? ('已投 ' + sums[0] + ' / ' + sums[1]) : (p.label || (paused ? '已暂停' : '运行中…')) }),
+    p.total ? el('span', { class: 'mono tlane-num', text: (p.current || 0) + ' / ' + p.total + ' · ' + pct + '%' }) : null,
+  ]));
+  const lanes = task.lanes || {};
+  if (Object.keys(lanes).length) node.appendChild(subLanes(lanes, paused));
+  else if (last) node.appendChild(el('div', { class: 'tlane-log mono' }, [el('span', { text: last }), el('i', { class: 'tlane-caret', 'aria-hidden': 'true' })]));
+  return node;
+}
+
+/* 日志时间线：所有任务的日志合成一条，按时间排（同一秒内保持各自原来的先后）；筛选只在本页记着 */
+function timeline(tasks) {
+  const rows = [];
+  tasks.forEach((task, ti) => {
+    const times = task.log_times || [];
+    const day = String(task.started_at || '').slice(0, 10);
+    (task.logs || []).forEach((line, i) => {
+      // 老后端没有 log_times：用任务开始时间垫底，至少同一任务内顺序不乱
+      const at = times[i] || String(task.started_at || '').slice(11, 19);
+      rows.push({ key: (day + ' ' + at), at, line, tone: laneTone(task), name: taskPlatform(task), tid: task.id, ti, i });
+    });
+  });
+  rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : (a.ti - b.ti) || (a.i - b.i)));
+  return rows;
+}
+function renderTimeline(tasks) {
+  const filterBox = $('taskLogFilter');
+  const list = $('logs');
+  const all = timeline(tasks);
+  // 筛选按钮按固定顺序排（BOSS / 前程无忧 / 猎聘 / 智联），不跟着日志先后跳
+  const rank = (t) => (PLATFORM_KEYS.includes(t) ? PLATFORM_KEYS.indexOf(t) : 99);
+  const tones = [...new Set(all.map((r) => r.tone))].sort((a, b) => rank(a) - rank(b));
+  if (state.logTone && !tones.includes(state.logTone)) state.logTone = '';
+  clear(filterBox);
+  const chips = [['', '全部']].concat(tones.map((t) => [t, t === 'x' ? '多平台' : platformName(t)]));
+  if (chips.length > 2) {
+    for (const [tone, label] of chips) {
+      const on = (state.logTone || '') === tone;
+      filterBox.appendChild(el('button', { class: 'tl-chip' + (tone ? ' tp-' + tone : '') + (on ? ' is-on' : ''), type: 'button',
+        'aria-pressed': on ? 'true' : 'false', text: label,
+        onclick: () => { state.logTone = tone; renderTask(state.status); } }));
+    }
+  }
+  const rows = (state.logTone ? all.filter((r) => r.tone === state.logTone) : all).slice(-200);
+  $('taskTimeline').hidden = !rows.length;
+  const running = tasks.some(taskRunning);
+  const open = state.logOpen ?? running;
+  $('taskTimeline').classList.toggle('is-collapsed', !open);
+  $('taskLogToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  $('taskLogToggle').title = open ? '收起运行日志' : '展开运行日志';
+  $('taskLogCount').textContent = open ? '' : (running ? '' : '最近一次 ') + rows.length + ' 条';
+  filterBox.hidden = !open;
+  // 内容没变就不重写，免得用户往上翻日志时被拽回底部
+  const sig = (state.logTone || '') + '|' + rows.length + '|' + (rows.length ? rows[rows.length - 1].tid + rows[rows.length - 1].i : '');
+  if (list.dataset.sig === sig) return;
+  const atBottom = !list.dataset.sig || list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+  list.dataset.sig = sig;
+  clear(list);
+  for (const r of rows) {
+    list.appendChild(el('li', { class: 'tl-row' }, [
+      el('time', { class: 'mono muted', text: r.at || '' }),
+      el('span', { class: 'tl-tag tp-' + r.tone, text: r.name }),
+      el('span', { class: 'tl-text', text: r.line }),
+    ]));
+  }
+  if (atBottom) list.scrollTop = list.scrollHeight;
+}
+
+/* 空闲时任务卡里列今天跑过的任务（/api/activity 的任务历史，看板重启后也在），每个一行；
+   最多 30 秒拉一次。今天一个都没跑过才显示「点运行全流程」 */
+function renderTodayRuns(list) {
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const runs = (state.todayRuns || []).filter((r) => String(r.created_at || '').startsWith(today));
+  if (!state.todayRunsAt || Date.now() - state.todayRunsAt > 30000) {
+    state.todayRunsAt = Date.now();
+    get('/api/activity?days=1&page_size=30').then((data) => {
+      if (!data || data.error || !Array.isArray(data.runs)) return;
+      state.todayRuns = data.runs;
+      if (state.status && !taskList(state.status).length) renderTask(state.status);
+    });
+  }
+  if (!runs.length) {
+    list.appendChild(empty('没有在跑的任务', '点「运行全流程」开始一次采集 → 评分 → 待确认',
+      [el('button', { class: 'btn small', text: '运行全流程', onclick: () => runTask('full') })]));
+    return;
+  }
+  list.appendChild(el('div', { class: 'today-head muted small', text: '今天跑过的任务' }));
+  // 卡片有多高就列多少（最多 20 个，卡片里滚）；想看全部去记录页
+  for (const run of runs.slice(0, 20)) {
+    const start = parseLocal(run.created_at); const end = parseLocal(run.finished_at);
+    const dur = start !== null && end !== null ? fmtDur(Math.max(0, Math.round((end - start) / 1000))) : '';
+    const bad = run.status === 'failed' || run.not_done || !!run.error;
+    const name = [platformName(run.platform) || (run.mode === 'apply' ? '所有平台' : ''), modeName(run.mode)].filter(Boolean).join(' · ');
+    const tone = PLATFORM_KEYS.includes(run.platform) ? run.platform : 'x';
+    list.appendChild(el('div', { class: 'tlane is-done tp-' + tone + (bad ? ' is-bad' : '') }, [
+      el('div', { class: 'tlane-head' }, [el('span', { class: 'tlane-dot', 'aria-hidden': 'true' }), el('b', { class: 'tlane-name', text: name })]),
+      el('div', { class: 'small tlane-sum' + (bad ? ' is-bad' : ' muted'), text: run.error || run.summary || '', title: run.error || run.summary || '' }),
+      el('span', { class: 'tlane-clock mono', text: String(run.created_at || '').slice(11, 16) + (dur ? ' · ' + dur : '') }),
+    ]));
+  }
+  list.appendChild(el('button', { class: 'link small tlane-more', type: 'button',
+    text: runs.length > 20 ? '今天共 ' + runs.length + ' 个任务 · 去记录页看全部' : '去记录页看任务历史',
+    onclick: () => switchView('activity') }));
+}
+
+function renderTask(status) {
+  const tasks = taskList(status);
+  renderTaskButtons(status, tasks);
 
   const pill = $('taskPill');
   const meta = $('taskMeta');
+  const list = $('taskList');
   const prog = $('progress');
-  const logs = $('logs');
+  clear(list);
   clear(prog);
-
-  if (!task) {
+  const live = tasks.filter(taskRunning);
+  const idle = !tasks.length;
+  $('ovWork').classList.toggle('no-task', idle);
+  $('taskCard').classList.toggle('is-compact', idle);
+  $('taskCard').classList.toggle('is-live', live.length > 0);
+  $('taskIdleText').textContent = idle ? '点「运行全流程」开始一次采集 → 评分 → 待确认' : '';
+  if (idle) {
     pill.className = 'pill';
     pill.textContent = '空闲';
     meta.textContent = '';
-    prog.appendChild(el('div', { class: 'muted small', text: '当前没有运行中的任务。点右上角「运行全流程」开始一次采集 → 评分 → 待确认。' }));
-    logs.style.display = 'none';
-    logs.textContent = '';
+    $('taskTimeline').hidden = true;
+    renderTodayRuns(list);
     return;
   }
-
-  // completed 但带 error = 跑完了却没做成（被风控锁 / 没登录 / 闸门拒绝），不能显示成绿色的「已完成」
-  const ok = task.status === 'completed' && !task.error;
-  const bad = task.status === 'failed';
-  pill.className = 'pill ' + (running ? 'live' : (ok ? 'ok' : (bad ? 'bad' : 'warn')));
-  pill.textContent = running ? (status.paused ? '已暂停' : '运行中')
-    : ({ completed: ok ? '已完成' : '没有做成', failed: '出错', stopped: '已停止' }[task.status] || task.status);
-  meta.textContent = [taskPlatform(task), modeName(task.mode)].filter(Boolean).join(' · ');
-
-  const p = task.progress || {};
-  if (running && p.total) prog.appendChild(progress(p.current || 0, p.total, p.label || ''));
-  else if (running) prog.appendChild(el('div', { class: 'muted small', text: '运行中…' }));
-  else if (task.error) prog.appendChild(el('div', { class: 'lock' }, [icon('alert'), task.error]));
-  else prog.appendChild(el('div', { class: 'muted small', text: '任务已结束。' }));
-  if (running) {
-    prog.appendChild(el('div', {
-      class: 'hint', style: 'margin-top:8px',
-      text: '任务在后台运行：关掉这个页面不会停止它，服务会继续采集/投递；要停就点右上角「停止」。',
-    }));
+  pill.className = 'pill ' + (live.length ? 'live' : '');
+  pill.textContent = live.length ? (live.length + ' 个运行中') : '空闲';
+  meta.textContent = live.length ? '' : '最近的任务';
+  // 在跑的排前面（按开始时间），跑完的排后面、收成一行
+  // 结束的只露最近 2 个，更早的收进「还有 N 个已结束」（点开再看）
+  const ended = tasks.filter((t) => !taskRunning(t));
+  const shownEnded = state.showEnded ? ended : ended.slice(0, live.length ? 1 : 2);
+  for (const task of [...live, ...shownEnded]) list.appendChild(lane(task, status));
+  if (ended.length > shownEnded.length || (state.showEnded && ended.length > 2)) {
+    list.appendChild(el('button', { class: 'link small tlane-more', type: 'button',
+      text: state.showEnded ? '收起已结束的任务' : '还有 ' + (ended.length - shownEnded.length) + ' 个已结束的任务',
+      onclick: () => { state.showEnded = !state.showEnded; renderTask(state.status || status); } }));
   }
-
-  logs.textContent = (task.logs || []).join('\n');
-  logs.style.display = logs.textContent ? '' : 'none';
-  logs.scrollTop = logs.scrollHeight;
+  renderTimeline(tasks);
 }
+
 /* ---------------- 岗位池：见 views/jobs.js ---------------- */
 
 /* ---------------- 待跟进 ---------------- */
+// 后端存的是本地时间 "YYYY-MM-DD HH:MM:SS"，换成 T 才能被 Date 按本地时间解析
+function parseLocal(value) {
+  const t = value ? new Date(String(value).replace(' ', 'T')).getTime() : NaN;
+  return Number.isNaN(t) ? null : t;
+}
+
+// "还要等多久"说人话：不足 1 小时按 1 小时算，超过一天就说天数
+function waitText(dueAt) {
+  const t = parseLocal(dueAt);
+  if (t === null) return '等待中';
+  const hours = Math.max(1, Math.ceil((t - Date.now()) / 3600000));
+  return hours >= 24 ? (Math.ceil(hours / 24) + ' 天后到期') : (hours + ' 小时后到期');
+}
+
+const FOLLOW_STATE = {
+  due: ['warn', '待跟进'],
+  answered: ['ok', '已有回复'],
+  done: ['', '已跟进'],
+  unknown: ['', '缺投递时间'],
+  disabled: ['', '跟进已关闭'],
+};
+
+/* 监测页两张表也分页：已投递岗位 / 进展记录多起来以后，第二张表被挤到很下面 */
+const MON_SIZES = [20, 50, 100];
+const monPage = {
+  follow: 1, followSize: loadPageSize('follow', MON_SIZES, MON_SIZES[0]),
+  hr: 1, hrSize: loadPageSize('hr', MON_SIZES, MON_SIZES[0]),
+};
+
+/* 监测页筛选（2026-10-20）：平台 + 搜索（公司 / 岗位 / HR），两张表一起筛；在服务端筛，翻页也对 */
+const monFilter = { platform: '', q: '' };
+try {
+  const saved = JSON.parse(localStorage.getItem('jp.monFilter') || '{}');
+  monFilter.platform = typeof saved.platform === 'string' ? saved.platform : '';
+} catch (e) { /* 读不到就用默认 */ }
+const monQuery = () => (monFilter.platform ? '&platform=' + encodeURIComponent(monFilter.platform) : '')
+  + (monFilter.q ? '&q=' + encodeURIComponent(monFilter.q) : '');
+function setMonFilter(patch) {
+  Object.assign(monFilter, patch);
+  try { localStorage.setItem('jp.monFilter', JSON.stringify({ platform: monFilter.platform })); } catch (e) { /* 隐私模式 */ }
+  monPage.follow = 1; monPage.hr = 1;
+  $('monClear').hidden = !monFilter.platform && !monFilter.q;
+  loadFollowUps(); loadInteractions();
+}
+function initMonitorBar() {
+  const sel = $('monPlatform');
+  const fill = () => {
+    const platforms = (state.status && state.status.platforms) || {};
+    const keys = Object.keys(platforms);
+    if (sel.options.length === keys.length + 1) return;
+    clear(sel);
+    sel.appendChild(el('option', { value: '', text: '全部平台' }));
+    for (const k of keys) sel.appendChild(el('option', { value: k, text: platformName(k) }));
+    sel.value = monFilter.platform;
+    if (sel.value !== monFilter.platform) monFilter.platform = '';
+  };
+  fill();
+  sel.addEventListener('focus', fill);
+  sel.addEventListener('change', () => setMonFilter({ platform: sel.value }));
+  const input = $('monQuery');
+  let timer = 0;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => setMonFilter({ q: input.value.trim() }), 300);   // 打字停一下再查，不是每个字都请求
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { input.value = ''; setMonFilter({ q: '' }); } });
+  $('monClear').addEventListener('click', () => { input.value = ''; sel.value = ''; setMonFilter({ platform: '', q: '' }); input.focus(); });
+  $('monClear').hidden = !monFilter.platform;
+  initMonitorBar.fill = fill;
+}
+
+/* 自动监测下一次什么时候跑（/api/monitor/schedule）；老后端没有这个接口就不显示 */
+async function loadMonitorSchedule() {
+  const box = $('monAuto');
+  const data = await get('/api/monitor/schedule');
+  if (!data || data.error || data.auto === undefined) { box.textContent = ''; return; }
+  if (!data.auto) { box.textContent = '自动监测已关（配置 → 监测里打开）'; return; }
+  const when = data.next_run ? '下一次约 ' + String(data.next_run).slice(11, 16) : '';
+  box.textContent = '自动监测：每 ' + data.interval_minutes + ' 分钟 · ' + data.working_hours
+    + (when ? ' · ' + when : '') + (data.reason ? '（' + data.reason + '）' : '');
+}
+
+/* 换每页条数：停在原来这页第一条所在的页 */
+function monResize(key, size, reload) {
+  const first = (monPage[key] - 1) * monPage[key + 'Size'];
+  monPage[key + 'Size'] = size;
+  monPage[key] = Math.floor(first / size) + 1;
+  savePageSize(key, size);
+  reload();
+}
+
 async function loadFollowUps() {
-  const rows = await get('/api/follow-ups');
-  const box = $('followUps');
-  clear(box);
-  const list = rows || [];
-  const due = list.filter((row) => row.due);
-  $('followCount').textContent = due.length;
-  $('followHint').textContent = list.length ? (list.length + ' 个已投递岗位') : '';
+  const data = await get('/api/follow-ups?page=' + monPage.follow + '&limit=' + monPage.followSize + monQuery());
+  const body = $('followUps');
+  clear(body);
+  // 兼容旧接口（直接返回数组 / 不分页）：页面可能比后台先更新
+  const list = Array.isArray(data) ? data : ((data && data.rows) || []);
+  const paged = !!(data && !Array.isArray(data) && data.page);
+  const total = paged ? data.total : list.length;
+  const afterHours = (data && data.after_hours) || 48;
+  // 待跟进个数 / 最早到期按全量算（分页后这一页里不一定有）
+  const dueCount = paged ? data.due_count : list.filter((row) => row.due).length;
+  $('followCount').textContent = dueCount;
+  const waiting = list.filter((row) => row.state === 'waiting');
+  const nextWait = paged ? data.next_wait_at : (waiting[0] && waiting[0].due_at);
+  let hint = total ? (total + ' 个已投递岗位') : '';
+  if (total && !dueCount && nextWait) {
+    // 后端按到期时间排好了：第一个 waiting 就是最早到期的那个
+    hint += '，最早一个' + waitText(nextWait);
+  }
+  $('followHint').textContent = hint;
+  if (paged) monPage.follow = data.page;
+  renderPager($('followPager'), paged ? { page: data.page, pages: data.pages, total, limit: data.limit } : null,
+    (n) => { monPage.follow = n; loadFollowUps(); },
+    { options: MON_SIZES, onChange: (n) => monResize('follow', n, loadFollowUps) });
+  if (!list.length && (monFilter.platform || monFilter.q)) {
+    body.appendChild(el('tr', {}, [el('td', { colspan: '6' }, [
+      empty('没有符合筛选的已投递岗位', '换个平台或搜索词试试，或点上面的「清除筛选」'),
+    ])]));
+    return;
+  }
   if (!list.length) {
-    box.appendChild(empty('还没有已投递的岗位', '投递成功后，超过设定时间没回复的岗位会出现在这里'));
+    body.appendChild(el('tr', {}, [el('td', { colspan: '6' }, [
+      empty('还没有已投递的岗位',
+        '投递成功（或在岗位详情里「标记为已投递」）后会列在这里；投递满 ' + afterHours
+        + ' 小时仍没有回复，就会变成「待跟进」，可以生成跟进话术'),
+    ])]));
     return;
   }
   for (const row of list) {
-    const item = el('div', { class: 'pending-item' });
-    item.appendChild(el('div', { class: 'pending-title' }, [
-      el('b', { text: row.title || '' }),
-      el('span', { class: 'muted', text: row.company || '' }),
-      el('span', { class: 'pill ' + (row.due ? 'warn' : ''), text: row.due ? '待跟进' : '已生成' }),
-      el('span', { class: 'pill', text: platformName(row.platform) }),
-    ]));
+    const tr = el('tr', { onclick: () => row.id && openJob(row.id) });
+    tr.appendChild(el('td', {}, [el('span', { class: 'pill', text: platformName(row.platform) })]));
+    tr.appendChild(el('td', { text: row.company || '' }));
+    tr.appendChild(el('td', { class: 'title', text: row.title || '' }));
+    tr.appendChild(el('td', { class: 'muted', text: fmtTime(row.applied_at) }));
+    const [tone, label] = row.state === 'waiting' ? ['', waitText(row.due_at)]
+      : (FOLLOW_STATE[row.state] || ['', row.due ? '待跟进' : '']);
+    tr.appendChild(el('td', {}, [label ? el('span', { class: 'pill ' + tone, text: label }) : null]));
+    const cell = el('td', { class: 'title' });
     if (row.follow_up) {
-      item.appendChild(el('div', { class: 'greeting', text: row.follow_up }));
-      item.appendChild(el('div', { class: 'actions' }, [
-        el('button', {
-          class: 'btn ghost small', text: '复制跟进话术',
-          onclick: async () => { await navigator.clipboard.writeText(row.follow_up); toast('已复制', 'ok'); },
-        }),
-      ]));
+      cell.appendChild(el('button', {
+        class: 'btn ghost small', text: '复制', title: row.follow_up,
+        onclick: async (ev) => {
+          // 别让点按钮也触发整行的"打开详情"
+          ev.stopPropagation();
+          try { await navigator.clipboard.writeText(row.follow_up); toast('已复制', 'ok'); } catch (e) { toast('复制失败（浏览器拒绝了剪贴板写入）', 'err'); }
+        },
+      }));
+      cell.appendChild(el('span', { class: 'muted', text: ' ' + row.follow_up }));
     }
-    box.appendChild(item);
+    tr.appendChild(cell);
+    body.appendChild(tr);
   }
 }
 
 /* ---------------- 监测 ---------------- */
 async function loadInteractions() {
-  state.interactions = await get('/api/interactions');
+  const data = await get('/api/interactions?page=' + monPage.hr + '&limit=' + monPage.hrSize + monQuery());
+  // 兼容旧接口（直接返回数组）
+  if (Array.isArray(data)) { state.interactions = data; state.hrPage = null; }
+  else if (data && Array.isArray(data.items)) { state.interactions = data.items; state.hrPage = data; monPage.hr = data.page; }
+  else { state.interactions = []; state.hrPage = null; }
   renderMonitor();
 }
 
@@ -418,7 +987,11 @@ function renderMonitor() {
   const body = $('hr');
   clear(body);
   const rows = state.interactions || [];
-  $('hrHint').textContent = rows.length + ' 条';
+  const paged = state.hrPage;
+  $('hrHint').textContent = (paged ? paged.total : rows.length) + ' 条';
+  renderPager($('hrPager'), paged && { page: paged.page, pages: paged.pages, total: paged.total, limit: paged.limit },
+    (n) => { monPage.hr = n; loadInteractions(); },
+    { options: MON_SIZES, onChange: (n) => monResize('hr', n, loadInteractions) });
   const platforms = (state.status && state.status.platforms) || {};
   const open = Object.keys(platforms).filter((k) => (platforms[k].capabilities || []).includes('monitor'));
   $('hrMode').className = 'pill ' + (open.length ? 'ok' : '');
@@ -427,8 +1000,12 @@ function renderMonitor() {
   const labels = (state.status && state.status.progress_states) || {};
   const stats = $('hrStats');
   clear(stats);
-  const counts = {};
-  for (const row of rows) counts[row.state] = (counts[row.state] || 0) + 1;
+  // 分页时用服务端的全量计数；旧接口才退回数当前这些行
+  let counts = paged && paged.counts;
+  if (!counts) {
+    counts = {};
+    for (const row of rows) counts[row.state] = (counts[row.state] || 0) + 1;
+  }
   if (rows.length) {
     for (const [key, label] of Object.entries(labels)) {
       if (!counts[key]) continue;
@@ -436,22 +1013,40 @@ function renderMonitor() {
     }
   }
 
+  if (!rows.length && (monFilter.platform || monFilter.q)) {
+    body.appendChild(el('tr', {}, [el('td', { colspan: '8' }, [
+      empty('没有符合筛选的进展', '换个平台或搜索词试试，或点上面的「清除筛选」'),
+    ])]));
+    return;
+  }
   if (!rows.length) {
-    body.appendChild(el('tr', {}, [el('td', { colspan: '6' }, [
+    // 说清楚为什么空：监测还没跑过 / 还没有 HR 动静
+    const names = open.map(platformName).join(' / ');
+    body.appendChild(el('tr', {}, [el('td', { colspan: '8' }, [
       empty('还没有进展记录',
-        '在岗位详情里点「记录进展」就能记（已查看 / 已回复 / 约面试 / offer…）；'
-        + (open.length ? '以后监测驱动会自动写进来' : 'HR 监测驱动还没核验，所以现在先手动记')),
+        (names ? names + ' 的 HR 查看 / 回复 / 邀面试由监测自动写进来（BOSS 读聊天列表，其他平台读「我的投递」）。' : '')
+        + '自动监测按配置的间隔在时段内跑；想马上看就点右上角「检查一次」。'
+        + '也可以在岗位详情里点「记录进展」手动记一笔。',
+        [el('button', { class: 'btn small', type: 'button', text: '检查一次', onclick: () => runTask('monitor') })]),
     ])]));
     return;
   }
   for (const row of rows) {
-    const tr = el('tr', { onclick: () => row.job_id && openJob(row.job_id) });
-    tr.appendChild(el('td', { text: row.company || '' }));
+    const tr = el('tr', { class: row.unread ? 'is-unread' : '', onclick: () => row.job_id && openJob(row.job_id) });
+    tr.appendChild(el('td', {}, [el('span', { class: 'pill', text: platformName(row.platform) })]));
+    tr.appendChild(el('td', {}, [row.unread ? el('span', { class: 'dot-new', title: '有未读消息', 'aria-label': '未读' }) : null, row.company || '']));
     tr.appendChild(el('td', { class: 'title', text: row.title || '' }));
     tr.appendChild(el('td', { text: row.hr_name || '' }));
     tr.appendChild(el('td', {}, [el('span', { class: 'pill', text: labels[row.state] || row.state || '' })]));
-    tr.appendChild(el('td', { class: 'title', text: row.last_text || '' }));
-    tr.appendChild(el('td', { class: 'muted', text: fmtTime(row.seen_at) }));
+    tr.appendChild(el('td', { class: 'title', text: row.last_text || '', title: row.last_text || null }));
+    tr.appendChild(el('td', { class: 'muted', text: row.msg_time || fmtTime(row.updated_at || row.seen_at) }));
+    // 去回复：在调试浏览器里打开这条会话 / 我的投递（登录在那边）
+    const link = row.deeplink || '';
+    tr.appendChild(el('td', {}, [link ? el('button', {
+      class: 'btn small' + (row.unread ? ' primary' : ' ghost'), type: 'button', text: '去回复',
+      title: '在调试浏览器里打开' + platformName(row.platform) + '的这条会话',
+      onclick: (ev) => { ev.stopPropagation(); openJobUrl(link, '已在调试浏览器里打开'); },
+    }) : null]));
     body.appendChild(tr);
   }
 }
@@ -499,6 +1094,7 @@ async function markApplied(job) {
 const EVENT_LABEL = {
   risk_lock: ['暂停平台', 'bad'], rate_stop: ['速率停手', 'warn'], risk: ['风控信号', 'bad'],
   page_error: ['页面异常', 'warn'], collect: ['采集', 'ok'], monitor: ['监测', 'ok'],
+  risk_resume: ['你已处理', 'ok'],
 };
 
 function bars(items, { label = (item) => item.label, value = (item) => item.value, mark = () => false, small = false } = {}) {
@@ -840,7 +1436,8 @@ async function openJob(id) {
         const res = await post('/api/jobs/' + encodeURIComponent(job.id) + '/progress', { state: key });
         if (res.error) { toast(res.error, 'err'); return; }
         toast('已记录：' + label, 'ok');
-        await loadInteractions();
+        // 记了"已回复"之类的进展，这个岗位就退出跟进队列，两张表一起刷新
+        await Promise.all([loadInteractions(), loadFollowUps()]);
         await refresh();
       },
     }));
@@ -1067,6 +1664,7 @@ function taskSummary(mode, all) {
   if (mode === 'collect') return name + '：' + where;
   if (mode === 'full') return name + '：' + where + '，然后评分、写招呼语，停在待确认';
   if (mode === 'apply') return name;
+  if ((mode === 'score' || mode === 'greet') && state.platform) return name + ' 的岗位';
   return '所有平台';
 }
 
@@ -1121,7 +1719,13 @@ async function openFullFlow() {
     status: state.status, config: state.config, preselect: state.platform ? [state.platform] : [],
     start: (body) => post('/api/tasks', body),
   });
-  if (started) { toast('全流程已开始', 'ok'); await refresh(); }
+  if (started) {
+    // 每个平台一个任务、同时开始；部分平台没开成时说明是哪个、为什么
+    const n = started.started || 0;
+    if (started.failed && started.failed.length) toast('已开始 ' + n + ' 个平台的全流程；没开成：' + started.failed.join('；'), 'warn');
+    else toast('已开始 ' + n + ' 个平台的全流程（同时进行）', 'ok');
+    await refresh();
+  }
 }
 
 async function runTask(mode, opts) {
@@ -1155,7 +1759,10 @@ async function runTask(mode, opts) {
       { okText: '开始投递' });
     if (!ok) return;
   }
-  const res = await post('/api/tasks', { mode, platform: (NEEDS_PLATFORM.has(mode) && !all) ? state.platform : '' });
+  // 顶栏的评分 / 招呼语只处理顶栏选的那个平台：前程无忧评分的同时，BOSS 可以照常采集、
+  // 智联可以照常投递（2026-10-16 用户要求）。概览上的「评分」仍是所有平台（opts.all）
+  const perPlatform = NEEDS_PLATFORM.has(mode) || ((mode === 'score' || mode === 'greet') && !(opts && opts.all));
+  const res = await post('/api/tasks', { mode, platform: (perPlatform && !all) ? state.platform : '' });
   if (res.error) { await alertDialog((TASK_TITLE[mode] || mode) + '没有开始', res.error, 'warn'); return; }
   toast('已开始' + (TASK_TITLE[mode] || mode) + '（' + taskSummary(mode, all) + '）', 'ok');
   await refresh();
@@ -1182,7 +1789,9 @@ async function refresh() {
   if (status.error) return;
   state.status = status;
   // 任务刚结束的那一下：系统通知 + 响一声 + 标签标题（见 notify.js）
-  watchTask(status.task, (task) => [taskPlatform(task), modeName(task.mode)].filter(Boolean).join(' · ') + ' ');
+  watchTasks(taskList(status), (task) => [taskPlatform(task), modeName(task.mode)].filter(Boolean).join(' · ') + ' ');
+  // 遇到验证 / 掉登录：不等任务结束，马上提醒（处理完回概览点「我已处理，继续」）
+  watchAttention(status.attention, (key) => ((status.platforms || {})[key] || {}).name || platformName(key));
 
   if (!state.config) state.config = await get('/api/config');   // 风控条需要"上限"做分母
 
@@ -1217,10 +1826,22 @@ async function refresh() {
     renderPipeline(status);
     renderRisk(status);
     renderPending(status);
+    refreshTrends(status);   // 自己节流：最多 60 秒拉一次
   }
   if (state.view === 'jobs') refreshJobsQuietly();
   // 记录页是聚合查询，不必跟 2 秒的心跳同频；15 秒刷一次足够
   if (state.view === 'activity' && Date.now() - (state.activityAt || 0) > 15000) loadActivity();
+  // 监测页：监测任务（手动「检查一次」或自动）刚结束就重拉两张表；平时 60 秒刷一次（自动监测随时可能写进来）
+  if (state.view === 'monitor') {
+    const last = taskList(status).find((t) => t.mode === 'monitor' && !taskRunning(t));
+    const doneMonitor = !!last && last.id !== state.monSeenDone;
+    if (last) state.monSeenDone = last.id;
+    if (doneMonitor || Date.now() - (state.monitorAt || 0) > 60000) {
+      state.monitorAt = Date.now();
+      loadFollowUps(); loadInteractions(); loadMonitorSchedule();
+    }
+    if (initMonitorBar.fill) initMonitorBar.fill();
+  }
 }
 
 function schedulePoll() {
@@ -1313,6 +1934,19 @@ function paintSkeletons() {
 function init() {
   setTheme(state.theme);
   initJobs({ openJob, runTask, openAndCopy, markApplied, refresh, natureLabel });
+  initMonitorBar();
+  $('queueTabs').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-q]');
+    if (!btn) return;
+    state.queueTab = btn.dataset.q; state.queuePinned = true;
+    (state.queueLists || {})[btn.dataset.q] && (state.queueLists[btn.dataset.q].at = 0);   // 换栏立刻重拉
+    if (state.status) renderPending(state.status);
+  });
+  $('taskLogToggle').addEventListener('click', () => {
+    const now = $('taskLogToggle').getAttribute('aria-expanded') === 'true';
+    state.logOpen = !now;
+    if (state.status) renderTask(state.status);
+  });
   paintSkeletons();
   window.addEventListener('jp:offline', () => $('offlineBar').classList.add('is-open'));
   window.addEventListener('jp:online', () => { $('offlineBar').classList.remove('is-open'); refresh(); });
@@ -1321,18 +1955,25 @@ function init() {
   $('platform').addEventListener('change', (event) => setPlatform(event.target.value));
   $('btnRefresh').addEventListener('click', refresh);
   $('btnTheme').addEventListener('click', () => setTheme(state.theme === 'dark' ? 'light' : 'dark'));
+  // 监测页「检查一次」：所有开放监测的平台逐个只读一遍（不指定平台）
+  $('btnMonitorNow').addEventListener('click', () => runTask('monitor'));
   for (const [id, mode] of [['btnCollect', 'collect'], ['btnScore', 'score'], ['btnGreet', 'greet'],
     ['btnApply', 'apply'], ['btnFull', 'full']]) {
     $(id).addEventListener('click', () => runTask(mode));
   }
   $('btnStop').addEventListener('click', async () => {
-    if (!(await confirmDialog('停止任务', '确定要停止当前任务吗？已完成的进度会保留。'))) return;
+    // 顶栏的停止 = 所有运行中的任务（不带 id）；只停一个用任务卡片上的「停止」
+    const n = state.status ? taskList(state.status).filter(taskRunning).length : 0;
+    const text = n > 1 ? '确定要停止全部 ' + n + ' 个运行中的任务吗？已完成的进度会保留。\n只想停一个：点任务卡片上那一个的「停止」。'
+      : '确定要停止当前任务吗？已完成的进度会保留。';
+    if (!(await confirmDialog('停止任务', text))) return;
     await post('/api/tasks/stop');
     toast('已请求停止', 'ok');
     refresh();
   });
   $('btnPause').addEventListener('click', async () => {
-    const paused = state.status && state.status.paused;
+    // 和按钮图标同一个判断：运行中的全都暂停了 = 全部继续，否则 = 全部暂停
+    const paused = $('btnPause').dataset.allPaused === '1';
     await post(paused ? '/api/tasks/resume' : '/api/tasks/pause');
     refresh();
   });
@@ -1362,7 +2003,14 @@ function init() {
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select';
     if (event.key === 'Escape') {
       if (typing) event.target.blur();
-      closeDrawer();
+      // 先关最上面那层：详情抽屉开着就只关它；否则概览上展开的风控明细收起（四个平台都收成一行）
+      if ($('drawer').classList.contains('is-open')) { closeDrawer(); return; }
+      if (state.view === 'overview' && state.riskOpenKey && state.riskOpenKey !== '-' && !typing) {
+        const key = state.riskOpenKey;
+        setRiskOpen('-');
+        const tile = $('risk').querySelector('[data-risk-key="' + key + '"]');
+        if (tile) tile.focus();
+      }
       return;
     }
     if (typing) return;

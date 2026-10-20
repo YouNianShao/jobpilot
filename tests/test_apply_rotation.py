@@ -149,3 +149,29 @@ def test_rotation_summary_reads_per_platform():
                                  "note": "没投的平台 —— 智联招聘：zhaopin 未开放自动投递"})
     assert text.startswith("BOSS直聘：投出 2 个；猎聘：投出 1 个（")
     assert "登录" in text and "智联" in text
+
+
+def test_rotation_reports_each_platform_lane(rig):
+    """任务监控台：所有平台轮流投时，每个平台一条小进度条（投了几个 / 共几个 / 现在在干嘛）"""
+    ctx, log, add_jobs = rig
+    add_jobs("pa", 2)
+    add_jobs("pb", 1)
+    lanes: dict = {}
+    states: list = []
+    waits: list = []
+
+    def report(platform, info):
+        lanes.setdefault(platform, {}).update(info)
+        states.append((platform, info["state"]))
+        if info["state"] == "waiting" and info["until"]:
+            waits.append(info["until"])
+
+    ctx.lane = report
+    reg = registry_of(Driver("pa", log), Driver("pb", log, fail_with=LoginRequired("掉登录")))
+    apply_all(ctx, registry=reg, clock=lambda: ctx_clock[0])
+    assert lanes["pa"]["state"] == "done" and lanes["pa"]["applied"] == 2 and lanes["pa"]["total"] == 2
+    assert lanes["pb"]["state"] == "stopped" and "登录" in lanes["pb"]["reason"]
+    assert ("pa", "applying") in states and ("pa", "waiting") in states
+    # 等间隔时带上「到点时刻」（墙上时间），界面据此倒计时
+    import time
+    assert waits and all(w > time.time() - 5 for w in waits)

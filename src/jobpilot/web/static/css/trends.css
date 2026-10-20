@@ -1,0 +1,72 @@
+/* 概览「趋势」（2026-10-20 改版）：一张全宽堆叠柱状图 + 「采集 | 投递」切换；共用图例按钮可只看一个平台。
+   平台色变量 --tp-* 定义在 app.css 的 .trend-card 上（深 / 浅两套）。
+   一屏概览里卡片定高（--fit:1），图高由 trends.js 的 chartHeight() 按卡片剩下的高度算；
+   顶行（切换 + 汇总 + 图例）尽量一行放下，宽度判断按容器（@container），不看视口。 */
+#trendBody { container: trend / inline-size; padding: 12px 16px 14px; }
+#trendBody > * + * { margin-top: 10px; }
+.tr-top { display: flex; align-items: center; gap: 6px 12px; min-height: 26px; min-width: 0; }
+.tr-summary { flex: 0 1 auto; min-width: 0; margin: 0; color: var(--muted); font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container trend (max-width: 700px) { .tr-top { flex-wrap: wrap; } }
+.tr-chart { min-width: 0; }
+
+/* 「采集 | 投递」分段切换 */
+.tr-metric { display: inline-flex; flex: none; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 999px; }
+.tr-metric-btn { height: 22px; padding: 0 11px; cursor: pointer; font: inherit; font-size: var(--fs-sm); color: var(--muted);
+  background: transparent; border: 0; border-radius: 999px; white-space: nowrap; transition: background .15s, color .15s; }
+.tr-metric-btn:hover { color: var(--text); }
+.tr-metric-btn.is-on { background: var(--accent-soft); color: var(--text); font-weight: var(--fw-bold); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.tr-metric-btn:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* 图例按钮 */
+/* 一行放不下时横向滚动而不是换行（换行会把固定高度的卡片撑出滚动条）；容器很窄时才换行 */
+.tr-legend { display: flex; gap: 4px; flex: 0 1 auto; min-width: 0; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
+.tr-legend::-webkit-scrollbar { display: none; }
+@container trend (max-width: 560px) { .tr-legend { flex-wrap: wrap; margin-left: 0; overflow-x: visible; } }
+.tr-chip { display: inline-flex; align-items: center; gap: 5px; flex: none; height: 24px; padding: 0 8px; cursor: pointer; white-space: nowrap;
+  font: inherit; font-size: var(--fs-sm); color: var(--text-2); background: transparent;
+  border: 1px solid var(--line); border-radius: 999px; transition: opacity .15s, border-color .15s, background .15s; }
+.tr-chip:hover { color: var(--text); border-color: var(--line-strong); }
+.tr-chip b { color: var(--text); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
+.tr-chip:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }  /* 图例会横向滚动，外圈焦点环会被裁掉 */
+.tr-chip.is-on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--text); }
+.tr-chip.is-dim { opacity: .45; }
+.tr-chip.is-dim:hover, .tr-chip.is-dim:focus-visible { opacity: .8; }
+@container trend (max-width: 880px) {
+  .tr-chip { padding: 0 6px; gap: 4px; }
+  .tr-name { font-size: 0; }
+  .tr-name::after { content: attr(data-short); font-size: var(--fs-sm); }
+}
+.tr-sw { display: inline-block; width: 8px; height: 8px; border-radius: 3px; flex: none; }
+.tr-sw.is-other { opacity: .8; }
+
+/* 图区：SVG 按真实像素宽度画，提示框绝对定位在里面 */
+.tr-plot { position: relative; min-width: 0; border-radius: var(--r-sm); }
+.tr-plot:focus-visible { outline: none; box-shadow: var(--ring); }
+/* app.css 有一条全局 svg { width:16px; height:16px; stroke:currentColor }（给图标用），
+   不压住它整张图会被缩成 16×16、文字还会描边。尺寸按 drawChart 量到的真实像素写在 style 上 */
+.tr-svg { display: block; overflow: visible; max-width: none; stroke: none; stroke-width: 0; fill: none; }
+.tr-grid line { stroke: var(--line); stroke-width: 1; shape-rendering: crispEdges; }
+.tr-grid line.tr-base { stroke: var(--line-strong); }
+.tr-ytick, .tr-xtick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tr-xtick.is-today { fill: var(--text); font-weight: var(--fw-bold); }
+.tr-empty { fill: var(--muted); font-size: var(--fs-sm); }
+.tr-seg { stroke: none; }
+.tr-seg.is-other { opacity: .7; }
+.tr-stub { fill: var(--line-strong); }
+.tr-band { fill: var(--fill-2); }
+.tr-avg line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; opacity: .7; shape-rendering: crispEdges; }
+.tr-avg text { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums;
+  paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+
+.tr-tip { position: absolute; z-index: 2; min-width: 120px; padding: 6px 9px; pointer-events: none;
+  background: var(--panel-solid); border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18); font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; }
+.tr-tip[hidden] { display: none; }
+.tr-tip-date { margin-bottom: 4px; color: var(--text); font-weight: var(--fw-bold); }
+.tr-tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.45; }
+.tr-tip-row b { margin-left: auto; padding-left: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+.tr-tip-row.is-total { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.tr-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) { .tr-chip, .tr-metric-btn { transition: none; } }

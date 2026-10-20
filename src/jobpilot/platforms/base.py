@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,7 +48,13 @@ class StopSignal:
 
     def check(self) -> None:
         """在安全点调用：若请求停止则抛 StopRequested，若暂停则阻塞。"""
-        self._pause.wait()
+        # 暂停时也要泵浏览器连接：以前是干等 Event，任务一暂停，浏览器里新开的标签页
+        # （例如 BOSS 掉登录、你去登录）就一直转圈（2026-10-16 你截图里 BOSS 采集正是「已暂停」）
+        while not self._pause.is_set():
+            if not self._pump(0.5):
+                self._pause.wait(0.5)
+            if self._stop.is_set():
+                break
         if self._stop.is_set():
             raise StopRequested()
 
@@ -55,7 +62,49 @@ class StopSignal:
         end = time.time() + max(0.0, seconds)
         while time.time() < end:
             self.check()
-            time.sleep(min(0.5, max(0.0, end - time.time())))
+            step = min(0.5, max(0.0, end - time.time()))
+            if not self._pump(step):
+                time.sleep(step)
+
+    # 等待时「泵」浏览器连接。2026-10-16 实测：任务在等间隔 / 拟人停留 / 冷却时，线程用 time.sleep
+    # 睡着，patchright 的驱动消息没人处理 —— 浏览器里新开的标签页（你自己去登录也一样）在等驱动
+    # 回话，于是一直转圈；4 个任务一起等的时候最明显。等待期间改成让浏览器连接继续收发消息。
+    def add_pump(self, pump) -> None:
+        self.__dict__.setdefault("_pumps", []).append(pump)
+
+    def _pump(self, seconds: float) -> bool:
+        pumps = self.__dict__.get("_pumps") or []
+        if not pumps:
+            return False
+        share = seconds / len(pumps)
+        alive = False
+        for pump in list(pumps):
+            try:
+                if pump(share):
+                    alive = True
+            except Exception:  # noqa: BLE001 - 连接已经断了：去掉它，退回普通的睡
+                pumps.remove(pump)
+        return alive
+
+
+@dataclass
+class SlotRun:
+    """一个 关键词×城市 组合这一次的翻页账本（提前结束 / 深度记忆 / 新岗位率都记在这）。"""
+
+    slot: str
+    label: str          # 日志里的说法：「上海/AI」
+    name: str           # 给人看的提示里的说法：「AI · 上海」
+    limit: int          # 这次最多翻到第几页
+    max_pages: int
+    full: bool          # 完整翻一次：翻到 max_pages、不提前结束（顺便更新深度记忆）
+    seen: int = 0
+    new: int = 0
+    pages: int = 0      # 真正打开处理过的页数（"刚采过、跳过"的页不算）
+    streak: int = 0     # 连续几页没有新岗位
+    deepest_new: int = 0
+    last_page: int = 0
+    stopped_at: int = 0  # 提前结束停在第几页（0 = 没有提前结束）
+    gaps: bool = False   # 中间有「刚采过、跳过」的页：那几页有没有新岗位不知道
 
 
 @dataclass
@@ -110,6 +159,92 @@ class DriverContext:
         self.repo.set_kv(f"collect:{self.platform}:{slot}:p{int(page)}",
                          datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
+    # ---------------- 翻页省预算：提前结束 + 深度记忆 ----------------
+    # 实测（账号 B）：前程无忧一轮看了 1200 张卡片，1130 张早就在库里；BOSS 300 张里 290 张重复。
+    # 每个组合都从第 1 页翻到第 max_pages 页，大部分搜索页额度和风险都花在「全是老岗位」的页上。
+    def slot_begin(self, slot: str, keyword: str, city: str, max_pages: int) -> SlotRun:
+        """开始翻一个组合：按上次「有新岗位的最深一页」决定这次最多翻几页。"""
+        label = f"{city}/{keyword}" if city else keyword
+        name = f"{keyword} · {city}" if city else keyword
+        max_pages = max(1, int(max_pages or 1))
+        days = float(getattr(self.config.safety, "full_recrawl_days", 3.0) or 0)
+        if days <= 0:                                   # 关掉深度记忆：每次都按 max_pages 翻（仍会提前结束）
+            return SlotRun(slot, label, name, max_pages, max_pages, full=False)
+        record = self._depth_record(slot)
+        due = record is None
+        if record is not None:
+            try:
+                full_at = datetime.strptime(str(record.get("full_at") or ""), "%Y-%m-%d %H:%M:%S")
+                due = (datetime.now() - full_at).total_seconds() >= days * 86400
+            except ValueError:
+                due = True
+        if due:
+            return SlotRun(slot, label, name, max_pages, max_pages, full=True)
+        depth = max(0, int(record.get("depth") or 0))
+        limit = min(max_pages, depth + 2)
+        if limit < max_pages:
+            self.log(f"[{self.platform}] {label}：上次第 {depth} 页之后就没有新岗位，"
+                     f"这次最多翻到第 {limit} 页（每 {days:g} 天完整翻一次）")
+        return SlotRun(slot, label, name, limit, max_pages, full=False)
+
+    def slot_page(self, run: SlotRun, page_no: int, *, seen: int, new: int) -> bool:
+        """一页处理完了调用一次；返回 True = 这个组合到此为止。
+
+        只统计真正打开的页：「刚采过、跳过」的页不调用它，所以不算进连续空页。
+        """
+        run.pages += 1
+        if int(page_no) - run.last_page > 1:
+            run.gaps = True
+        run.last_page = int(page_no)
+        run.seen += max(0, int(seen))
+        run.new += max(0, int(new))
+        if new > 0:
+            run.streak = 0
+            run.deepest_new = max(run.deepest_new, int(page_no))
+            return False
+        run.streak += 1
+        need = int(getattr(self.config.safety, "stop_after_empty_pages", 2) or 0)
+        if run.full or need <= 0 or run.streak < need or page_no >= run.limit:
+            return False
+        run.stopped_at = int(page_no)
+        self.log(f"[{self.platform}] {run.label}：连续 {run.streak} 页没有新岗位，"
+                 f"提前结束这个组合（省下 {run.limit - page_no} 页）")
+        return True
+
+    def slot_end(self, result: CollectResult, run: SlotRun) -> None:
+        """组合翻完（含提前结束 / 到底）：记总数、记每组合的新岗位率、更新深度记忆。"""
+        if run.stopped_at:
+            result.early_stopped += 1
+            result.pages_saved += run.limit - run.stopped_at
+        result.pages_saved += run.max_pages - run.limit      # 按上次深度封顶少翻的页
+        if run.pages <= 0:                                   # 全是「刚采过」跳过的页：什么都不知道，不改记忆
+            return
+        result.slots.append({"slot": run.slot, "label": run.name, "seen": run.seen,
+                             "new": run.new, "pages": run.pages})
+        if float(getattr(self.config.safety, "full_recrawl_days", 3.0) or 0) <= 0:
+            return
+        record = self._depth_record(run.slot) or {}
+        if run.full:
+            depth = run.deepest_new
+            if run.gaps:                                # 有跳过的页：别把深度记浅了
+                depth = max(depth, int(record.get("depth") or 0))
+            record = {"depth": depth, "full_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        elif run.deepest_new > int(record.get("depth") or 0):
+            record["depth"] = run.deepest_new
+        else:
+            return
+        self.repo.set_kv(f"collect:depth:{self.platform}:{run.slot}", json.dumps(record, ensure_ascii=False))
+
+    def _depth_record(self, slot: str) -> dict | None:
+        raw = self.repo.get_kv(f"collect:depth:{self.platform}:{slot}")
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) else None
+
     def reserve(self, stage: str) -> None:
         """开页面前过闸门；被拒时抛 ``safety.Denied``。
 
@@ -127,13 +262,15 @@ def explain_missing(page, label: str) -> None:
     人机验证（2026-10-14）时，系统只把它当「改版或加载慢」，还会接着开页面。
     """
     from ..models import LoginRequired, PageReadError, PlatformRisk
+    from ..safety.attention import tag_page
     from ..safety.risk import classify_risk
 
     kind = classify_risk(page.text(), page.url)
+    # tag_page：验证 / 掉登录时记下是这一页，关页面时把它留给你处理（见 safety/attention.py）
     if kind == "login_required":
-        raise LoginRequired(f"{label} 需要登录")
+        raise tag_page(LoginRequired(f"{label} 需要登录"), page)
     if kind:
-        raise PlatformRisk(kind, label)
+        raise tag_page(PlatformRisk(kind, label), page)
     raise PageReadError(f"{label} 未找到预期内容（可能改版或被拦截）")
 
 
@@ -144,6 +281,7 @@ def stop_if_risky(page, label: str) -> None:
     从不看这一页是不是验证码 / 访问频繁 —— 平台已经开始拦了，我们还在一页接一页地往上撞。
     """
     from ..models import LoginRequired, PlatformRisk
+    from ..safety.attention import tag_page
     from ..safety.risk import classify_risk
 
     try:
@@ -151,9 +289,9 @@ def stop_if_risky(page, label: str) -> None:
     except Exception:  # noqa: BLE001 - 页面读不出来就当普通失败，交给连续失败计数
         return
     if kind == "login_required":
-        raise LoginRequired(f"{label} 需要登录")
+        raise tag_page(LoginRequired(f"{label} 需要登录"), page)
     if kind:
-        raise PlatformRisk(kind, f"{label}出现风控信号")
+        raise tag_page(PlatformRisk(kind, f"{label}出现风控信号"), page)
 
 
 def _ago(seconds: float) -> str:

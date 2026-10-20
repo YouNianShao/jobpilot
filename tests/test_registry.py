@@ -54,7 +54,7 @@ def test_default_registry_builds():
     assert "boss" in registry.keys()
     assert registry.supports("boss", "collect") is True
     assert registry.supports("boss", "apply") is True
-    assert registry.supports("boss", "monitor") is False
+    assert registry.supports("boss", "monitor") is True
 
 # ---------------- 能力门：跑不了就直说，别让用户白等一场 ----------------
 def gate_config(enabled: bool = True, apply: bool = True):

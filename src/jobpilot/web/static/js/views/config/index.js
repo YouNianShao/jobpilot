@@ -123,6 +123,7 @@ function renderConfig() {
     for (const [path, label, type, wide] of fields) {
       const value = pick(cfg, path);
       const shown = (type === 'list' || type === 'windows') ? (value || []).join(',') : (value === undefined || value === null ? '' : value);
+      // windows-str：后端存的是一个字符串（"08:00-12:00,14:00-22:00"），界面和 windows 一样用下拉
       (wide ? wideRow : shortRow).appendChild(configField(path, label, type, shown, wide));
     }
     if (shortRow.children.length) body.appendChild(shortRow);
@@ -334,8 +335,10 @@ async function saveConfig() {
         // 空 = 不限 = 0（后端的约定）；两个框一起存
         put(payload, 'profile.salary_min', Number($('cfg::profile.salary_min').value) || 0);
         put(payload, 'profile.salary_max', Number($('cfg::profile.salary_max').value) || 0);
-      } else if (type === 'number') {
+      } else if (type === 'number' || type === 'interval') {
         put(payload, path, Number(input.value));
+      } else if (type === 'windows-str') {
+        put(payload, path, splitList(input.value).join(','));
       } else if (type === 'list' || type === 'windows') {
         put(payload, path, splitList(input.value));
       } else {

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .models import APPLIED_STATUSES, Job, now_str, today_str
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _MIGRATIONS: dict[int, str] = {
     1: """
@@ -154,6 +154,14 @@ _MIGRATIONS: dict[int, str] = {
     CREATE INDEX IF NOT EXISTS idx_jobs_live_keys ON jobs(deleted_at, id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_events_kind_job ON events(kind, job_id, detail);
     """,
+    # 10：监测读到的「未读 / 列表上的时间 / 最后一句什么时候变的」。
+    #   以前状态没往前走就整行跳过，HR 新发的消息永远写不进来（2026-10-20）。
+    10: """
+    ALTER TABLE interactions ADD COLUMN unread INTEGER DEFAULT 0;
+    ALTER TABLE interactions ADD COLUMN msg_time TEXT DEFAULT '';
+    ALTER TABLE interactions ADD COLUMN updated_at TEXT;
+    CREATE INDEX IF NOT EXISTS idx_interactions_platform ON interactions(platform);
+    """,
 }
 
 
@@ -257,6 +265,30 @@ class Repo:
         if existing:
             return False, job.id
 
+        # 同一平台、同标题、同公司、同城市，而且**其中一条的薪资被打码（「**-**元」）** =
+        # 同一个岗位换了个 id。2026-10-15 智联实测：列表有时不带岗位编号，id 退回「标题|公司|薪资」的哈希，
+        # 没登录时薪资显示成「**-**元」，登录后是真薪资 —— 同一个岗位就以两个 id 进了库，会被评两次分、甚至投两次。
+        # 两条都是正常数据的不合并：同一家公司同一个标题挂好几个职位很常见，那是真的不同岗位。
+        same = self.conn.execute(
+            "SELECT id, salary, url FROM jobs WHERE platform = ? AND norm_title = ? AND norm_company = ? "
+            "AND COALESCE(city, '') = ? AND deleted_at IS NULL ORDER BY rowid LIMIT 1",
+            (job.platform, job.norm_title, job.norm_company, job.city or ""),
+        ).fetchone() if job.norm_title and job.norm_company else None
+        # 另一种同样的情况：旧记录是没有编号 / 链接的哈希 id（智联滚动加载的批次，2026-10-16 前的版本），
+        # 这次采到了带链接的同一个岗位 —— 补上链接，不再新建一条重复的
+        if same and ("*" in (job.salary or "") or "*" in (same["salary"] or "") or (job.url and not same["url"])):
+            # 顺手把旧记录缺的补上：被打码的薪资、空的链接（不改状态、不改评分）
+            fill = {}
+            if job.salary and "*" not in job.salary and (not same["salary"] or "*" in same["salary"]):
+                fill["salary"] = job.salary
+            if job.url and not same["url"]:
+                fill["url"] = job.url
+            if fill:
+                sets = ", ".join(f"{k} = ?" for k in fill)
+                self.conn.execute(f"UPDATE jobs SET {sets} WHERE id = ?", (*fill.values(), same["id"]))
+                self.conn.commit()
+            return False, str(same["id"])
+
         dup = self.find_cross_platform_dup(job.platform, job.norm_title, job.norm_company)
         if dup:
             self.add_event(dup, "cross_platform_dup", f"{job.platform} 同岗位重复，跳过")
@@ -321,6 +353,8 @@ class Repo:
         "company": "company {dir}, created_at DESC",
         "city": "city {dir}, created_at DESC",
         "status": "status {dir}, created_at DESC",
+        # 状态最后一次变化的时间：概览「投递队列」里「今日已投」按投出去的先后排
+        "updated": "updated_at {dir}, created_at DESC",
     }
 
     def query_jobs(self, *, status: str | None = None, q: str = "", platform: str | None = None,
@@ -661,6 +695,63 @@ class Repo:
         sql += " GROUP BY stage"
         return {str(row["stage"]): int(row["count"]) for row in self.conn.execute(sql, args).fetchall()}
 
+    def daily_counts(self, days: int = 14) -> list[dict]:
+        """近 N 天每天采集了多少、投递了多少（按平台分），概览「趋势」卡片用。
+
+        没数据的日子也补 0：界面要画连续的横轴，缺一天会把趋势看歪。
+        """
+        days = max(1, min(90, int(days)))
+        today = datetime.now().date()
+        dates = [(today - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d") for i in range(days)]
+        out = {d: {"date": d, "collected": {}, "applied": {}} for d in dates}
+        # 采集：按入库时间算，**不算回收站里的**（2026-10-20 用户要求）：挪进回收站的多半是
+        # 坏数据（例如 10-16 那 521 个没有链接的智联岗位），算进来会把那一天顶得老高、其它天全压扁
+        for row in self.conn.execute(
+            "SELECT date(created_at) AS d, platform, COUNT(*) AS n FROM jobs "
+            "WHERE date(created_at) >= ? AND deleted_at IS NULL GROUP BY d, platform",
+            (dates[0],),
+        ):
+            if row["d"] in out:
+                out[row["d"]]["collected"][str(row["platform"])] = int(row["n"])
+        # 投递：口径和 Policy.applied_today 一致（所有 applied 事件），今天的总数才对得上上限。
+        # 用 LEFT JOIN 取平台：岗位被彻底删除的投递也要算，归到 other
+        for row in self.conn.execute(
+            "SELECT date(e.created_at) AS d, COALESCE(j.platform, 'other') AS platform, COUNT(*) AS n "
+            "FROM events e LEFT JOIN jobs j ON j.id = e.job_id "
+            "WHERE e.kind = 'applied' AND date(e.created_at) >= ? GROUP BY d, platform",
+            (dates[0],),
+        ):
+            if row["d"] in out:
+                out[row["d"]]["applied"][str(row["platform"])] = int(row["n"])
+        return [out[d] for d in dates]
+
+    def hourly_counts(self, day: str | None = None) -> list[dict]:
+        """某天（默认今天）每小时采集 / 投递多少（按平台分），趋势卡片「今天」用。口径同 daily_counts。
+
+        今天只给到当前这一小时（含），之后的还没发生，画出来会是一截假的 0；别的日子给满 24 小时。
+        时间戳是本地时间文本 'YYYY-MM-DD HH:MM:SS'，直接按 date() / strftime('%H') 切。
+        """
+        now = datetime.now()
+        day = day or now.strftime("%Y-%m-%d")
+        last = now.hour if day == now.strftime("%Y-%m-%d") else 23
+        out = [{"date": f"{day} {h:02d}:00", "hour": h, "collected": {}, "applied": {}} for h in range(last + 1)]
+        for row in self.conn.execute(
+            "SELECT CAST(strftime('%H', created_at) AS INTEGER) AS h, platform, COUNT(*) AS n FROM jobs "
+            "WHERE date(created_at) = ? AND deleted_at IS NULL GROUP BY h, platform",
+            (day,),
+        ):
+            if row["h"] is not None and 0 <= row["h"] <= last:
+                out[row["h"]]["collected"][str(row["platform"])] = int(row["n"])
+        for row in self.conn.execute(
+            "SELECT CAST(strftime('%H', e.created_at) AS INTEGER) AS h, COALESCE(j.platform, 'other') AS platform, "
+            "COUNT(*) AS n FROM events e LEFT JOIN jobs j ON j.id = e.job_id "
+            "WHERE e.kind = 'applied' AND date(e.created_at) = ? GROUP BY h, platform",
+            (day,),
+        ):
+            if row["h"] is not None and 0 <= row["h"] <= last:
+                out[row["h"]]["applied"][str(row["platform"])] = int(row["n"])
+        return out
+
     # ---------------- 漏斗 / 关键词效果（"记录"页的决策依据） ----------------
     def pool_funnel(self, threshold: int = 0) -> dict:
         """整个岗位池的漏斗：采到 → 打过分 → 过了阈值 → 确认过 → 投出去。"""
@@ -811,28 +902,104 @@ class Repo:
     # ---------------- interactions ----------------
     def upsert_interaction(self, key: str, platform: str, job_id: str | None,
                            hr_name: str, state: str, last_text: str, deeplink: str,
-                           company: str = "") -> None:
+                           company: str = "", *, unread: bool | int | None = None,
+                           msg_time: str | None = None) -> None:
+        """写一条进展（同一个 key 再写 = 更新）。
+
+        ``updated_at`` 只在最后一句话变了（或第一次写入）时更新 —— 列表按它排「最近有动静」；
+        ``seen_at`` 是最近一次监测看到它的时间。``unread`` / ``msg_time`` 传 None = 不改原值。
+        状态不往回退这件事由监测驱动自己判断（人工「记录进展」可以改正成更早的状态）。
+        """
+        now = now_str()
         self.conn.execute(
-            "INSERT INTO interactions (key, platform, job_id, hr_name, state, last_text, deeplink, seen_at, company) "
-            "VALUES (?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(key) DO UPDATE SET state=excluded.state, last_text=excluded.last_text, "
-            "seen_at=excluded.seen_at, job_id=excluded.job_id, "
-            "company=COALESCE(NULLIF(excluded.company, ''), interactions.company)",
-            (key, platform, job_id, hr_name, state, last_text, deeplink, now_str(), company),
+            "INSERT INTO interactions (key, platform, job_id, hr_name, state, last_text, deeplink, seen_at, "
+            "company, unread, msg_time, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET state=excluded.state, "
+            # SET 里引用的 interactions.* 都是更新前的旧值（SQLite 语义），和赋值顺序无关
+            "updated_at=CASE WHEN COALESCE(interactions.last_text, '') = COALESCE(excluded.last_text, '') "
+            "THEN COALESCE(interactions.updated_at, interactions.seen_at) ELSE excluded.updated_at END, "
+            "last_text=excluded.last_text, seen_at=excluded.seen_at, job_id=excluded.job_id, "
+            "company=COALESCE(NULLIF(excluded.company, ''), interactions.company), "
+            "unread=COALESCE(?, interactions.unread), msg_time=COALESCE(?, interactions.msg_time)",
+            (key, platform, job_id, hr_name, state, last_text, deeplink, now, company,
+             int(bool(unread)) if unread is not None else 0, msg_time or "", now,
+             int(bool(unread)) if unread is not None else None, msg_time),
         )
         self.conn.commit()
 
-    def list_interactions(self, limit: int = 200) -> list[dict]:
-        """带上岗位标题/公司 —— 界面那两列一直都在，但以前 SQL 里根本没查出来（一直显示空白）。"""
+    @staticmethod
+    def _interaction_where(platform: str | None, q: str) -> tuple[str, list]:
+        where, args = [], []
+        if platform:
+            where.append("i.platform = ?")
+            args.append(platform)
+        text = (q or "").strip()
+        if text:
+            like = "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            where.append("(COALESCE(NULLIF(i.company, ''), j.company, '') LIKE ? ESCAPE '\\' "
+                         "OR COALESCE(j.title, '') LIKE ? ESCAPE '\\' "
+                         "OR COALESCE(i.hr_name, '') LIKE ? ESCAPE '\\')")
+            args += [like, like, like]
+        return (" WHERE " + " AND ".join(where)) if where else "", args
+
+    def list_interactions(self, limit: int = 200, offset: int = 0, *,
+                          platform: str | None = None, q: str = "") -> list[dict]:
+        """带上岗位标题/公司 —— 界面那两列一直都在，但以前 SQL 里根本没查出来（一直显示空白）。
+
+        排序：未读在前，再按「最后一句变化的时间」倒序（老数据没有 updated_at 就用 seen_at）。
+        ``q`` 搜公司 / 岗位标题 / HR 名字（不分大小写，% 和 _ 按字面匹配）。
+        """
+        where, args = self._interaction_where(platform, q)
+        # 排序带上 key：同一秒写入的几条，翻页时顺序也要稳定，不然会重复 / 漏掉
         rows = self.conn.execute(
             "SELECT i.key, i.platform, i.job_id, i.hr_name, i.state, i.last_text, "
-            "i.deeplink, i.seen_at, j.title AS title, "
+            "i.deeplink, i.seen_at, COALESCE(i.unread, 0) AS unread, COALESCE(i.msg_time, '') AS msg_time, "
+            "COALESCE(i.updated_at, i.seen_at) AS updated_at, j.title AS title, "
             "COALESCE(NULLIF(i.company, ''), j.company) AS company "
-            "FROM interactions i LEFT JOIN jobs j ON j.id = i.job_id "
-            "ORDER BY i.seen_at DESC LIMIT ?",
-            (limit,),
+            f"FROM interactions i LEFT JOIN jobs j ON j.id = i.job_id{where} "
+            "ORDER BY COALESCE(i.unread, 0) DESC, COALESCE(i.updated_at, i.seen_at) DESC, i.key "
+            "LIMIT ? OFFSET ?",
+            [*args, int(limit), max(0, int(offset))],
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [{**dict(r), "unread": bool(r["unread"])} for r in rows]
+
+    def interaction_state_counts(self, *, platform: str | None = None, q: str = "") -> dict[str, int]:
+        """每种进展状态各几条（受平台 / 搜索词筛选）：分页之后，概览条不能只数当前这一页。"""
+        where, args = self._interaction_where(platform, q)
+        rows = self.conn.execute(
+            f"SELECT i.state, COUNT(*) FROM interactions i LEFT JOIN jobs j ON j.id = i.job_id{where} "
+            "GROUP BY i.state", args,
+        ).fetchall()
+        # 空状态也算进来：总条数是这些数字加起来的，漏掉就会少翻一页
+        return {str(r[0] or ""): int(r[1]) for r in rows}
+
+    def interaction_platform_counts(self, *, q: str = "") -> dict[str, int]:
+        """平台分档上的数字：受搜索词影响、不受平台筛选影响（点之前就知道会看到几条）。"""
+        where, args = self._interaction_where(None, q)
+        rows = self.conn.execute(
+            f"SELECT i.platform, COUNT(*) FROM interactions i LEFT JOIN jobs j ON j.id = i.job_id{where} "
+            "GROUP BY i.platform", args,
+        ).fetchall()
+        return {str(r[0] or ""): int(r[1]) for r in rows}
+
+    def interactions_by_key(self, platform: str) -> dict[str, dict]:
+        """某个平台已经记过的进展（key -> 行）：监测比对「这一条有没有变化」用。"""
+        rows = self.conn.execute(
+            "SELECT key, state, last_text, unread, msg_time, job_id FROM interactions WHERE platform = ?",
+            (platform,),
+        ).fetchall()
+        return {row["key"]: dict(row) for row in rows}
+
+    def get_interaction(self, key: str) -> dict | None:
+        row = self.conn.execute("SELECT * FROM interactions WHERE key = ?", (key,)).fetchone()
+        return dict(row) if row else None
+
+    def job_interaction_states(self, job_id: str) -> set[str]:
+        """某个岗位记过的进展状态（手动「记录进展」和监测驱动都写这张表）。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT state FROM interactions WHERE job_id = ?", (job_id,)
+        ).fetchall()
+        return {str(r[0]) for r in rows if r[0]}
 
     def count_interactions_by_states(self, states) -> int:
         """有多少个**不同岗位**处在这些状态（漏斗里的"进面试 / 拿到 offer"）。"""

@@ -118,10 +118,17 @@ class ServerCfg(BaseModel):
 
 
 class MonitorCfg(BaseModel):
+    """监测 HR 回复：auto 开启时看板在后台按间隔自动跑一次「监测全部平台」。
+
+    working_hours 支持多段，逗号分隔，例如 "08:00-12:00, 14:00-22:00"；
+    "08:00-00:00" / "08:00-24:00" 表示一直到午夜。留空 = 不限时段。
+    间隔下限 10 分钟：监测也要开页面，开得太勤本身就是风控特征。
+    """
+
     enabled: bool = True
-    auto: bool = False
-    interval_minutes: int = Field(default=30, ge=1)
-    working_hours: str = "09:00-21:00"
+    auto: bool = True
+    interval_minutes: int = Field(default=60, ge=10, le=720)
+    working_hours: str = "08:00-22:00"
 
 
 class DailyPages(BaseModel):
@@ -140,6 +147,21 @@ class PlatformSafetyCfg(BaseModel):
     risk_lock_minutes: int | None = None
     max_pages_per_10min: int | None = None
     max_pages_per_hour: int | None = None
+
+
+class HumanizeCfg(BaseModel):
+    """像人一样浏览：详情页读一会儿、列表页扫一眼（只滚动 / 移动鼠标 / 悬停，从不点击）。
+
+    为什么算风控：秒开秒关、从不滚动、鼠标从不动的页面访问，是很明显的机器特征。
+    """
+
+    enabled: bool = True
+    # 详情页「读 JD」的停留时长（秒）：按偏态分布随机，JD 越长读得越久，但不超过上限
+    detail_read_min_seconds: float = Field(default=4.0, ge=0)
+    detail_read_max_seconds: float = Field(default=14.0, ge=0)
+    # 搜索结果页解析完后，往下滚几下、在一两张卡片上停一下
+    list_glance: bool = True
+    max_hovers: int = Field(default=2, ge=0, le=5)
 
 
 class SafetyCfg(BaseModel):
@@ -206,10 +228,18 @@ class SafetyCfg(BaseModel):
     # 却实打实地多花一次页面预算 —— 纯粹的账号风险，没有任何收益。
     # 0 = 每次都采（想手动强制刷新时用）。
     recollect_after_hours: float = Field(default=6.0, ge=0)
+    # 连续几页没有新岗位就结束这个「关键词×城市」组合（后面的页大概率也是旧的，翻下去只是白花预算）。
+    # 0 = 照旧翻满 max_pages。
+    stop_after_empty_pages: int = Field(default=2, ge=0)
+    # 记住了某个组合的有效深度后，每隔几天仍完整翻一次（防止新岗位排在后面一直看不到）。
+    full_recrawl_days: float = Field(default=3.0, ge=0)
 
     max_pages_per_10min: int = Field(default=15, ge=0)
     max_pages_per_hour: int = Field(default=60, ge=0)
     rate_wait_max_seconds: float = Field(default=900.0, ge=0)
+
+    # 像人一样浏览（停留 / 滚动 / 鼠标移动悬停）；见 browser/humanize.py
+    humanize: HumanizeCfg = Field(default_factory=HumanizeCfg)
 
     def pages_for(self, platform: str) -> DailyPages:
         override = (self.platforms or {}).get(platform)
@@ -377,6 +407,8 @@ def config_problems(config: AppConfig) -> dict[str, str]:
     safety = config.safety
     if safety.page_interval_min_seconds > safety.page_interval_max_seconds:
         problems["safety.page_interval_max_seconds"] = "最长间隔不能小于最短间隔"
+    if safety.humanize.detail_read_min_seconds > safety.humanize.detail_read_max_seconds:
+        problems["safety.humanize.detail_read_max_seconds"] = "最长停留不能小于最短停留"
     if config.profile.salary_max and config.profile.salary_min > config.profile.salary_max:
         problems["profile.salary_max"] = "薪资上限不能低于下限（0 = 不限）"
     return problems
