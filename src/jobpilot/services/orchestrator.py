@@ -117,7 +117,8 @@ def run(ctx: ServiceContext, mode: str, platform: str | None = None, *, registry
         return collector.collect(ctx, platform, registry=registry,
                                  keywords=options.get("keywords"),
                                  cities=options.get("cities"),
-                                 max_pages=options.get("max_pages"))
+                                 max_pages=options.get("max_pages"),
+                                 slots=options.get("slots"))
     if mode == "score":
         return scorer.score_jobs(ctx, platform, limit=options.get("limit"))
     if mode == "greet":
@@ -135,7 +136,7 @@ def run(ctx: ServiceContext, mode: str, platform: str | None = None, *, registry
     summary["steps"]["collect"] = collector.collect(
         ctx, platform, registry=registry,
         keywords=options.get("keywords"), cities=options.get("cities"),
-        max_pages=options.get("max_pages"))
+        max_pages=options.get("max_pages"), slots=options.get("slots"), resume_mode="full")
     # 评分 / 招呼语只管本平台：别的平台可能正同时跑着自己的全流程，
     # 这里再顺手评一遍会把同一批岗位评两次、花两份 token。别的平台的存量用独立的「评分」任务处理。
     ctx.stage("score")
@@ -189,7 +190,8 @@ def run_full_multi(ctx: ServiceContext, plans: list[dict], *, registry=None, lim
         key = plan["platform"]
         ctx.log(f"[full] 采集 {registry.get(key).name}")
         per[key] = collector.collect(ctx, key, registry=registry, keywords=plan.get("keywords"),
-                                     cities=plan.get("cities"), max_pages=plan.get("max_pages"))
+                                     cities=plan.get("cities"), max_pages=plan.get("max_pages"),
+                                     slots=plan.get("slots"), resume_mode="full")
     collected: dict = {"per_platform": per}
     for field in ("new", "duplicate", "filtered"):
         collected[field] = sum(int(r.get(field) or 0) for r in per.values() if isinstance(r, dict))

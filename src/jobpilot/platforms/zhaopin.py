@@ -30,7 +30,7 @@ from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.attention import release_page
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago, explain_missing, stop_if_risky
+from .base import DriverContext, SlotSpec, _ago, explain_missing, stop_if_risky
 
 SEARCH_URL = "https://www.zhaopin.com/jobs?kw={kw}"
 # 2026-10-13 实测：不带城市时智联按 IP 猜城市，返回的不是你要的城市 → 本地按城市过滤会把整页都丢掉
@@ -159,90 +159,95 @@ class ZhaopinDriver:
         # 有城市码的城市逐个搜（带 jl=）；没有城市码的，合成一次不带城市的搜索、再本地过滤（旧办法）
         coded = [c for c in wanted if c in CITY_CODES]
         targets = coded + ([""] if len(coded) < len(wanted) or not wanted else [])
+        specs = [SlotSpec(f"{k}@{c}" if c else k, k, c) for k in cfg.keywords for c in targets]
+        # 智联是「一个搜索页往下滚、一批一批加载」：同一个组合的批次必须连着在同一页里滚，
+        # 所以这里不做广度优先（换组合 = 换页面，回不到原来滚到的位置）；轮转 / 补采 / 没轮到的组合照常记。
         try:
-            for keyword, city in ((k, c) for k in cfg.keywords for c in targets):
-                slot = f"{keyword}@{city}" if city else keyword
-                recent = ctx.skip_recently_collected(slot, 1)
-                if recent is not None:
-                    result.skipped += 1
-                    ctx.log(f"[zhaopin] {city + '/' if city else ''}{keyword} {_ago(recent)}采过，跳过")
-                    continue
-                ctx.stop.check()
-                ctx.reserve("collect_search")
-                url = search_url(keyword, city)
-                if page_obj is None:
-                    page_obj = ctx.browser.open(url)
-                else:
-                    page_obj.goto(url)
-                if not page_obj.wait_for(".job-card", timeout_ms=30000):
-                    explain_missing(page_obj, f"[zhaopin] 搜索页 {keyword}")
+            with ctx.slot_session(result, specs) as session:
+                for spec in session.order:
+                    keyword, city, slot = spec.keyword, spec.city, spec.slot
+                    recent = ctx.skip_recently_collected(slot, 1)
+                    if recent is not None:
+                        result.skipped += 1
+                        ctx.log(f"[zhaopin] {city + '/' if city else ''}{keyword} {_ago(recent)}采过，跳过")
+                        continue
+                    ctx.stop.check()
+                    ctx.reserve("collect_search")
+                    url = search_url(keyword, city)
+                    if page_obj is None:
+                        page_obj = ctx.browser.open(url)
+                    else:
+                        page_obj.goto(url)
+                    session.opened(slot)
+                    if not page_obj.wait_for(".job-card", timeout_ms=30000):
+                        explain_missing(page_obj, f"[zhaopin] 搜索页 {keyword}")
 
-                processed: set[str] = set()
-                cards = 0
-                run = ctx.slot_begin(slot, keyword, city, cfg.max_pages)   # 一批 = 一页
-                for batch in range(1, run.limit + 1):
-                    if batch > 1:
-                        ctx.stop.check()
-                        ctx.reserve("collect_search")      # 每多加载一批 = 一次搜索页额度
-                        grown = self._load_more(ctx, page_obj, cards)
-                        if grown <= cards:
-                            ctx.log(f"[zhaopin] {keyword} 第 {batch} 批没有新增卡片，说明已到底")
+                    processed: set[str] = set()
+                    cards = 0
+                    run = ctx.slot_begin(slot, keyword, city, cfg.max_pages)   # 一批 = 一页
+                    for batch in range(1, run.limit + 1):
+                        if batch > 1:
+                            ctx.stop.check()
+                            ctx.reserve("collect_search")      # 每多加载一批 = 一次搜索页额度
+                            grown = self._load_more(ctx, page_obj, cards)
+                            if grown <= cards:
+                                ctx.log(f"[zhaopin] {keyword} 第 {batch} 批没有新增卡片，说明已到底")
+                                break
+                        items = parse_list(page_obj.eval(JS_LIST))
+                        cards = max(cards, len(items))
+                        fresh = [item for item in items if make_job_id(item) not in processed]
+                        new_before = result.new
+                        ctx.log(f"[zhaopin] {keyword} 第 {batch} 批：累计 {cards} 张卡片，本批新增 {len(fresh)} 条")
+                        # 先解析再扫一眼；下一批的「滚到底加载」按卡片数判断，不受这里的滚动影响
+                        humanize.after_list(ctx, page_obj, CARD_SELECTOR)
+
+                        for item in fresh:
+                            ctx.stop.check()
+                            job_id = make_job_id(item)
+                            processed.add(job_id)
+                            # 拿不到岗位编号 = 没有链接：不入库（岗位池里的岗位都要能点开、能投递）
+                            if not str(item.get("number") or "").strip():
+                                result.failed += 1
+                                continue
+                            location = item.get("location", "")
+                            if wanted and location and not any(w in location for w in wanted):
+                                result.filtered += 1
+                                continue
+                            if ctx.repo.get_job(job_id):
+                                result.duplicate += 1
+                                continue
+                            tags = item.get("tags") or []
+                            number = str(item.get("number") or "").strip()
+                            job_url = JOB_URL.format(number=number) if number else ""
+                            jd = " ".join(str(t) for t in tags)
+                            if cfg.fetch_detail and job_url and not detail_exhausted:
+                                try:
+                                    jd, detail_page = self._fetch_jd(ctx, detail_page, job_url)
+                                except Denied as exc:
+                                    if exc.kind in {"budget", "rate"}:
+                                        detail_exhausted = True
+                                        ctx.log("[zhaopin] 详情页预算用尽，后续只采列表字段（JD 留标签）")
+                                    else:
+                                        raise
+                            inserted, _ = ctx.repo.upsert_job(Job(
+                                id=job_id, platform=self.key,
+                                external_id=number or job_id.split("-", 1)[1],
+                                title=item.get("title", ""), company=item.get("company", ""),
+                                salary=item.get("salary", ""),
+                                city=(location.split(" ")[0] if location else ""),
+                                url=job_url,
+                                jd=jd,
+                            ))
+                            if inserted:
+                                result.new += 1
+                                ctx.repo.add_event(job_id, "collected", f"{keyword}（第 {batch} 批）")
+                            else:
+                                result.duplicate += 1
+                        if ctx.slot_page(run, batch, seen=len(fresh), new=result.new - new_before):
                             break
-                    items = parse_list(page_obj.eval(JS_LIST))
-                    cards = max(cards, len(items))
-                    fresh = [item for item in items if make_job_id(item) not in processed]
-                    new_before = result.new
-                    ctx.log(f"[zhaopin] {keyword} 第 {batch} 批：累计 {cards} 张卡片，本批新增 {len(fresh)} 条")
-                    # 先解析再扫一眼；下一批的「滚到底加载」按卡片数判断，不受这里的滚动影响
-                    humanize.after_list(ctx, page_obj, CARD_SELECTOR)
-
-                    for item in fresh:
-                        ctx.stop.check()
-                        job_id = make_job_id(item)
-                        processed.add(job_id)
-                        # 拿不到岗位编号 = 没有链接：不入库（岗位池里的岗位都要能点开、能投递）
-                        if not str(item.get("number") or "").strip():
-                            result.failed += 1
-                            continue
-                        location = item.get("location", "")
-                        if wanted and location and not any(w in location for w in wanted):
-                            result.filtered += 1
-                            continue
-                        if ctx.repo.get_job(job_id):
-                            result.duplicate += 1
-                            continue
-                        tags = item.get("tags") or []
-                        number = str(item.get("number") or "").strip()
-                        job_url = JOB_URL.format(number=number) if number else ""
-                        jd = " ".join(str(t) for t in tags)
-                        if cfg.fetch_detail and job_url and not detail_exhausted:
-                            try:
-                                jd, detail_page = self._fetch_jd(ctx, detail_page, job_url)
-                            except Denied as exc:
-                                if exc.kind in {"budget", "rate"}:
-                                    detail_exhausted = True
-                                    ctx.log("[zhaopin] 详情页预算用尽，后续只采列表字段（JD 留标签）")
-                                else:
-                                    raise
-                        inserted, _ = ctx.repo.upsert_job(Job(
-                            id=job_id, platform=self.key,
-                            external_id=number or job_id.split("-", 1)[1],
-                            title=item.get("title", ""), company=item.get("company", ""),
-                            salary=item.get("salary", ""),
-                            city=(location.split(" ")[0] if location else ""),
-                            url=job_url,
-                            jd=jd,
-                        ))
-                        if inserted:
-                            result.new += 1
-                            ctx.repo.add_event(job_id, "collected", f"{keyword}（第 {batch} 批）")
-                        else:
-                            result.duplicate += 1
-                    if ctx.slot_page(run, batch, seen=len(fresh), new=result.new - new_before):
-                        break
-                result.seen += len(processed)
-                ctx.note_collect(slot, batch)      # 滚动的每一批各记一笔
-                ctx.slot_end(result, run)
+                    result.seen += len(processed)
+                    ctx.note_collect(slot, batch)      # 滚动的每一批各记一笔
+                    ctx.slot_end(result, run)
         except Denied as exc:
             if is_graceful_stop(exc):
                 result.stopped = exc.reason

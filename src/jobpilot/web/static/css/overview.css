@@ -183,3 +183,8 @@
   .ov .rtile { grid-template-columns: minmax(100px, auto) auto minmax(0, 1fr) auto 14px; }
   .ov .rtile > .psafe-sum { gap: 10px; }
 }
+
+/* 「去确认」点了之后投递队列闪一下：让你知道点到了、该看哪里 */
+.pending-card.is-flash { animation: q-flash 1.2s var(--ease); }
+@keyframes q-flash { 0%, 100% { box-shadow: var(--shadow-2), var(--hairline); } 25% { box-shadow: 0 0 0 2px var(--accent), 0 0 24px -4px var(--accent); } }
+@media (prefers-reduced-motion: reduce) { .pending-card.is-flash { animation: none; outline: 2px solid var(--accent); } }

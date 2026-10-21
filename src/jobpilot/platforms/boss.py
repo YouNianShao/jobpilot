@@ -34,7 +34,7 @@ from ..safety.risk import classify_risk
 
 # 城市表在 boss_cities.py 里（373 个，来自 BOSS 公开接口，用 tools/refresh_boss_cities.py 刷新）。
 # 以前只内置 20 个，别的城市会被静默跳过 —— 那是"跑了但什么都没采到"的典型。
-from .base import DriverContext, _ago
+from .base import DriverContext, SlotSpec
 from .boss_cities import CITY_CODES, HOT_CITIES  # noqa: F401  （HOT_CITIES 给界面做快捷选择）
 from .record_monitor import write_observation
 
@@ -274,105 +274,99 @@ class BossDriver:
             result.stopped = "未启用"
             return result
 
-        search_page = None
-        detail_page = None
+        pages: dict[str, object] = {"search": None, "detail": None}
         skipped_cities: list[str] = []
-        try:
-            for city in cfg.cities:
-                code = city_code(city)
-                if not code:
-                    skipped_cities.append(city)
-                    ctx.log(f"[boss] 城市不在内置表里，跳过：{city}")
+        specs: list[SlotSpec] = []
+        for city in cfg.cities:
+            code = city_code(city)
+            if not code:
+                skipped_cities.append(city)
+                ctx.log(f"[boss] 城市不在内置表里，跳过：{city}")
+                continue
+            specs += [SlotSpec(f"{city}|{keyword}", keyword, city, code) for keyword in cfg.keywords]
+
+        def fetch(spec: SlotSpec, run, page_no: int) -> tuple[int, int] | None:
+            city, keyword = spec.city, spec.keyword
+            ctx.reserve("collect_search")
+            url = search_url(keyword, spec.data, page_no)
+            if pages["search"] is None:
+                pages["search"] = ctx.browser.open(url)
+            else:
+                pages["search"].goto(url)
+            search_page = pages["search"]
+            _guard(ctx, search_page, ".job-card-wrap", f"[boss] 搜索页 {city}/{keyword}")
+
+            items = parse_list(search_page.eval(JS_LIST))
+            if not items:
+                return None                       # 这页确实没有结果，也算采过
+            result.seen += len(items)
+            new_before = result.new
+            ctx.log(f"[boss] {city}/{keyword} 第 {page_no} 页 {len(items)} 条")
+            # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
+            humanize.after_list(ctx, search_page, CARD_SELECTOR)
+
+            for item in items:
+                ctx.stop.check()
+                ext_id = job_id_from_url(item.get("url", ""))
+                if not ext_id:
                     continue
-                for keyword in cfg.keywords:
-                    slot = f"{city}|{keyword}"
-                    run = ctx.slot_begin(slot, keyword, city, cfg.max_pages)
-                    for page_no in range(1, run.limit + 1):
-                        recent = ctx.skip_recently_collected(slot, page_no)
-                        if recent is not None:
-                            result.skipped += 1
-                            ctx.log(f"[boss] {city}/{keyword} 第 {page_no} 页 {_ago(recent)}采过，跳过")
-                            continue
-                        ctx.stop.check()
-                        ctx.reserve("collect_search")
-                        url = search_url(keyword, code, page_no)
-                        if search_page is None:
-                            search_page = ctx.browser.open(url)
-                        else:
-                            search_page.goto(url)
-                        _guard(ctx, search_page, ".job-card-wrap", f"[boss] 搜索页 {city}/{keyword}")
+                job_id = f"boss-{ext_id}"
+                if ctx.repo.get_job(job_id):
+                    result.duplicate += 1
+                    continue
+                job_city = item.get("location", "").split("·")[0] if item.get("location") else ""
 
-                        items = parse_list(search_page.eval(JS_LIST))
-                        if not items:
-                            ctx.note_collect(slot, page_no)     # 这页确实没有结果，也算采过
-                            break
-                        result.seen += len(items)
-                        new_before = result.new
-                        ctx.log(f"[boss] {city}/{keyword} 第 {page_no} 页 {len(items)} 条")
-                        # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
-                        humanize.after_list(ctx, search_page, CARD_SELECTOR)
+                # 只看列表就能判掉的（实习 / 排除词 / 岗位性质）不再开详情页：
+                # 每个详情页都占预算、还要等一次 5~14 秒的节流，开了也是被预筛拒掉。
+                listed = Job(
+                    id=job_id, platform=self.key, external_id=ext_id,
+                    title=item.get("title", ""), company=item.get("company", ""),
+                    city=job_city, url=JOB_URL.format(job_id=ext_id),
+                    status=Status.REJECTED.value,
+                )
+                rejected, reason = prefilter(listed, ctx.config)
+                if rejected:
+                    inserted, _ = ctx.repo.upsert_job(listed)
+                    if inserted:
+                        ctx.repo.add_event(job_id, "collected", f"{city}/{keyword}")
+                        ctx.repo.add_event(job_id, "prefilter_rejected", f"{reason}（列表页预筛，未开详情页）")
+                    result.filtered += 1
+                    continue
 
-                        for item in items:
-                            ctx.stop.check()
-                            ext_id = job_id_from_url(item.get("url", ""))
-                            if not ext_id:
-                                continue
-                            job_id = f"boss-{ext_id}"
-                            if ctx.repo.get_job(job_id):
-                                result.duplicate += 1
-                                continue
-                            job_city = item.get("location", "").split("·")[0] if item.get("location") else ""
+                # 尊重"打开详情页抓 JD"这个开关（以前 BOSS 是硬开的，
+                # 开关点了也不会变——和另外三个平台行为不一致）。
+                # BOSS 的列表页没有薪资也没有 JD，所以它在默认配置里是 True。
+                if cfg.fetch_detail:
+                    detail = self._fetch_detail(ctx, ext_id, pages["detail"])
+                    if pages["detail"] is None:
+                        pages["detail"] = detail.pop("_page", None)
+                    else:
+                        detail.pop("_page", None)
+                else:
+                    detail = {}
 
-                            # 只看列表就能判掉的（实习 / 排除词 / 岗位性质）不再开详情页：
-                            # 每个详情页都占预算、还要等一次 5~14 秒的节流，开了也是被预筛拒掉。
-                            listed = Job(
-                                id=job_id, platform=self.key, external_id=ext_id,
-                                title=item.get("title", ""), company=item.get("company", ""),
-                                city=job_city, url=JOB_URL.format(job_id=ext_id),
-                                status=Status.REJECTED.value,
-                            )
-                            rejected, reason = prefilter(listed, ctx.config)
-                            if rejected:
-                                inserted, _ = ctx.repo.upsert_job(listed)
-                                if inserted:
-                                    ctx.repo.add_event(job_id, "collected", f"{city}/{keyword}")
-                                    ctx.repo.add_event(job_id, "prefilter_rejected", f"{reason}（列表页预筛，未开详情页）")
-                                result.filtered += 1
-                                continue
+                inserted, _ = ctx.repo.upsert_job(Job(
+                    id=job_id,
+                    platform=self.key,
+                    external_id=ext_id,
+                    title=detail.get("title") or item.get("title", ""),
+                    company=detail.get("company") or item.get("company", ""),
+                    salary=detail.get("salary", ""),
+                    city=job_city,
+                    url=JOB_URL.format(job_id=ext_id),
+                    jd=detail.get("jd", ""),
+                    status="new",
+                ))
+                if inserted:
+                    result.new += 1
+                    ctx.repo.add_event(job_id, "collected", f"{city}/{keyword}")
+                else:
+                    result.duplicate += 1
+            return len(items), result.new - new_before
 
-                            # 尊重"打开详情页抓 JD"这个开关（以前 BOSS 是硬开的，
-                            # 开关点了也不会变——和另外三个平台行为不一致）。
-                            # BOSS 的列表页没有薪资也没有 JD，所以它在默认配置里是 True。
-                            if cfg.fetch_detail:
-                                detail = self._fetch_detail(ctx, ext_id, detail_page)
-                                if detail_page is None:
-                                    detail_page = detail.pop("_page", None)
-                                else:
-                                    detail.pop("_page", None)
-                            else:
-                                detail = {}
-
-                            inserted, _ = ctx.repo.upsert_job(Job(
-                                id=job_id,
-                                platform=self.key,
-                                external_id=ext_id,
-                                title=detail.get("title") or item.get("title", ""),
-                                company=detail.get("company") or item.get("company", ""),
-                                salary=detail.get("salary", ""),
-                                city=job_city,
-                                url=JOB_URL.format(job_id=ext_id),
-                                jd=detail.get("jd", ""),
-                                status="new",
-                            ))
-                            if inserted:
-                                result.new += 1
-                                ctx.repo.add_event(job_id, "collected", f"{city}/{keyword}")
-                            else:
-                                result.duplicate += 1
-                        ctx.note_collect(slot, page_no)    # 这一页处理完才记；被打断就不记
-                        if ctx.slot_page(run, page_no, seen=len(items), new=result.new - new_before):
-                            break
-                    ctx.slot_end(result, run)
+        try:
+            # 广度优先：每个组合先翻前 2 页，再一个组合一个组合往深翻（见 DriverContext.crawl_slots）
+            ctx.crawl_slots(result, specs, fetch, max_pages=cfg.max_pages)
         except Denied as exc:
             # 预算耗尽 / 平台被锁：停止该平台，已入库的岗位保留
             if is_graceful_stop(exc):
@@ -381,7 +375,7 @@ class BossDriver:
             else:
                 raise
         finally:
-            for page in (search_page, detail_page):
+            for page in pages.values():
                 release_page(page)   # 验证 / 掉登录的那一页留给你处理
         if skipped_cities and len(skipped_cities) == len(cfg.cities):
             # 一个城市都没跑成：直接说清楚，别让任务显示"完成"却一条都没采到

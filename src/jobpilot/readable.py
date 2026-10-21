@@ -148,10 +148,58 @@ def low_yield_hints(result: object) -> list[str]:
 
 
 def run_summary(mode: str, result: object, error: str = "") -> str:
-    """任务历史「结果 / 原因」一列（采集类结果末尾附上低产出组合的提示）。"""
+    """任务历史「结果 / 原因」一列（采集类结果末尾附上补采 / 没采到 / 续采 / 低产出组合的提示）。"""
     text = _run_summary(mode, result, error)
-    hints = [] if error else low_yield_hints(result)
+    hints = [] if error else [*collect_hints(result), *low_yield_hints(result)]
     return "；".join([text, *hints]) if hints else text
+
+
+MISSED_MAX_LABELS = 4
+
+
+def _names(labels: list) -> str:
+    """「数据分析 · 上海、智能体 · 上海」，超过 4 个写「…等 N 个」。"""
+    labels = [str(item) for item in labels if str(item)]
+    text = "、".join(labels[:MISSED_MAX_LABELS])
+    return text + (f" 等 {len(labels)} 个" if len(labels) > MISSED_MAX_LABELS else "")
+
+
+def collect_hints(result: object) -> list[str]:
+    """采集结果里的组合调度提示：先补了哪些 / 额度用完没采到哪些 / 多久后自动接着采。
+
+    单平台采集读结果本身；多平台 / 全流程读 ``per_platform`` / ``steps.collect`` 下各平台的。
+    """
+    found: list[str] = []
+
+    def one(node: dict, platform: str, prefix: bool) -> None:
+        head = f"{platform_name(platform)} " if prefix and platform else ""
+        carried = node.get("carried") or []
+        if carried:
+            found.append(f"{head}先补了上次没采到的：{_names(carried)}")
+        if node.get("resume_at"):
+            count = int(node.get("resume_slots") or len(node.get("missed") or []))
+            window = node.get("resume_window") or "1 小时"
+            minutes = node.get("resume_in_minutes")
+            when = f"约 {minutes} 分钟后" if minutes else f"{str(node['resume_at'])[11:16]} 后"
+            found.append(f"{head}{window}开页上限到了，{when}自动接着采 {count} 个组合")
+        elif node.get("missed"):
+            found.append(f"{head}额度用完，没采到：{_names(node['missed'])}（下次先补）")
+
+    def walk(node: object, platform: str, prefix: bool) -> None:
+        if not isinstance(node, dict):
+            return
+        platform = str(node.get("platform") or platform)
+        one(node, platform, prefix)
+        per = node.get("per_platform")
+        if isinstance(per, dict):
+            for key, sub in per.items():
+                walk(sub, str(key), len(per) > 1)
+        steps = node.get("steps")
+        if isinstance(steps, dict):
+            walk(steps.get("collect"), platform, prefix)
+
+    walk(result, "", False)
+    return found
 
 
 def _run_summary(mode: str, result: object, error: str = "") -> str:

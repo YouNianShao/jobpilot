@@ -133,6 +133,15 @@ class CollectResult:
     pages_saved: int = 0    # 因提前结束 / 按上次深度封顶而少翻的页数
     # 每个组合一条：{slot, label, seen, new, pages}（看哪个组合几乎采不到新岗位）
     slots: list[dict] = field(default_factory=list)
+    # 这次没轮到的组合（额度 / 速率窗口停手）：给人看的说法「数据分析 · 上海」
+    missed: list[str] = field(default_factory=list)
+    missed_slots: list[str] = field(default_factory=list)   # 同上，组合键（续采 / 补采用）
+    # 开过页、但被停在半路还没翻完的组合（速率窗口停手时一起续采；不进「下次先补」）
+    partial: list[str] = field(default_factory=list)
+    partial_slots: list[str] = field(default_factory=list)
+    stop_kind: str = ""     # 停手原因分类：Denied.kind（budget / rate / locked …），没停 = ""
+    resume_at: str = ""     # 安排了自动续采时：大约几点接着采（YYYY-MM-DD HH:MM:SS，由采集服务填）
+    carried: list[str] = field(default_factory=list)   # 这次先补的、上次没采到的组合（给人看的说法）
 
 
 @dataclass

@@ -15,7 +15,7 @@ from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.attention import release_page
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago, explain_missing, stop_if_risky
+from .base import DriverContext, SlotSpec, explain_missing, stop_if_risky
 
 SEARCH_URL = "https://we.51job.com/pc/search?jobArea={city}&keyword={kw}&searchType=2&keywordType=&page={page}"
 # 2026-10-10 实机验证：列表里的公司链接路径段是 /all/，岗位详情同一段可用
@@ -130,78 +130,74 @@ class Job51Driver:
             result.stopped = "未启用"
             return result
 
-        page_obj = None
-        detail_page = None
+        pages: dict[str, object] = {"search": None, "detail": None}
         detail_exhausted = False
         skipped_cities: list[str] = []
-        try:
-            for city in cfg.cities:
-                code = city_code(city)
-                if not code:
-                    skipped_cities.append(city)
-                    ctx.log(f"[51job] 城市不在内置表里，跳过：{city}")
+        specs: list[SlotSpec] = []
+        for city in cfg.cities:
+            code = city_code(city)
+            if not code:
+                skipped_cities.append(city)
+                ctx.log(f"[51job] 城市不在内置表里，跳过：{city}")
+                continue
+            specs += [SlotSpec(f"{city}|{keyword}", keyword, city, code) for keyword in cfg.keywords]
+
+        def fetch(spec: SlotSpec, run, page_no: int) -> tuple[int, int] | None:
+            nonlocal detail_exhausted
+            city, keyword = spec.city, spec.keyword
+            ctx.reserve("collect_search")
+            url = search_url(keyword, spec.data, page_no)
+            if pages["search"] is None:
+                pages["search"] = ctx.browser.open(url)
+            else:
+                pages["search"].goto(url)
+            page_obj = pages["search"]
+            if not page_obj.wait_for(".joblist-item", timeout_ms=30000):
+                explain_missing(page_obj, f"[51job] 搜索页 {city}/{keyword}")
+
+            items = parse_list(page_obj.eval(JS_LIST))
+            if not items:
+                return None
+            result.seen += len(items)
+            new_before = result.new
+            ctx.log(f"[51job] {city}/{keyword} 第 {page_no} 页 {len(items)} 条")
+            # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
+            humanize.after_list(ctx, page_obj, CARD_SELECTOR)
+
+            for item in items:
+                ctx.stop.check()
+                job_id = make_job_id(item)
+                if ctx.repo.get_job(job_id):
+                    result.duplicate += 1
                     continue
-                for keyword in cfg.keywords:
-                    slot = f"{city}|{keyword}"
-                    run = ctx.slot_begin(slot, keyword, city, cfg.max_pages)
-                    for page_no in range(1, run.limit + 1):
-                        recent = ctx.skip_recently_collected(slot, page_no)
-                        if recent is not None:
-                            result.skipped += 1
-                            ctx.log(f"[51job] {city}/{keyword} 第 {page_no} 页 {_ago(recent)}采过，跳过")
-                            continue
-                        ctx.stop.check()
-                        ctx.reserve("collect_search")
-                        url = search_url(keyword, code, page_no)
-                        if page_obj is None:
-                            page_obj = ctx.browser.open(url)
+                jd = ""
+                if cfg.fetch_detail and not detail_exhausted:
+                    try:
+                        jd, pages["detail"] = self._fetch_jd(ctx, pages["detail"], item.get("url", ""))
+                    except Denied as exc:
+                        if exc.kind in {"budget", "rate"}:
+                            detail_exhausted = True
+                            ctx.log("[51job] 详情页预算用尽，后续只采列表字段（JD 留空）")
                         else:
-                            page_obj.goto(url)
-                        if not page_obj.wait_for(".joblist-item", timeout_ms=30000):
-                            explain_missing(page_obj, f"[51job] 搜索页 {city}/{keyword}")
+                            raise
+                inserted, _ = ctx.repo.upsert_job(Job(
+                    id=job_id, platform=self.key,
+                    external_id=str(item.get("jobId") or ""),
+                    title=item.get("title", ""), company=item.get("company", ""),
+                    salary=item.get("salary", ""),
+                    city=(item.get("area", "") or "").split("·")[0],
+                    url=item.get("url", ""), jd=jd,
+                ))
+                if inserted:
+                    result.new += 1
+                    ctx.repo.add_event(job_id, "collected", f"{city}/{keyword}")
+                else:
+                    result.duplicate += 1
+            return len(items), result.new - new_before
 
-                        items = parse_list(page_obj.eval(JS_LIST))
-                        if not items:
-                            break
-                        result.seen += len(items)
-                        new_before = result.new
-                        ctx.log(f"[51job] {city}/{keyword} 第 {page_no} 页 {len(items)} 条")
-                        # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
-                        humanize.after_list(ctx, page_obj, CARD_SELECTOR)
-
-                        for item in items:
-                            ctx.stop.check()
-                            job_id = make_job_id(item)
-                            if ctx.repo.get_job(job_id):
-                                result.duplicate += 1
-                                continue
-                            jd = ""
-                            if cfg.fetch_detail and not detail_exhausted:
-                                try:
-                                    jd, detail_page = self._fetch_jd(ctx, detail_page, item.get("url", ""))
-                                except Denied as exc:
-                                    if exc.kind in {"budget", "rate"}:
-                                        detail_exhausted = True
-                                        ctx.log("[51job] 详情页预算用尽，后续只采列表字段（JD 留空）")
-                                    else:
-                                        raise
-                            inserted, _ = ctx.repo.upsert_job(Job(
-                                id=job_id, platform=self.key,
-                                external_id=str(item.get("jobId") or ""),
-                                title=item.get("title", ""), company=item.get("company", ""),
-                                salary=item.get("salary", ""),
-                                city=(item.get("area", "") or "").split("·")[0],
-                                url=item.get("url", ""), jd=jd,
-                            ))
-                            if inserted:
-                                result.new += 1
-                                ctx.repo.add_event(job_id, "collected", f"{city}/{keyword}")
-                            else:
-                                result.duplicate += 1
-                        ctx.note_collect(slot, page_no)
-                        if ctx.slot_page(run, page_no, seen=len(items), new=result.new - new_before):
-                            break
-                    ctx.slot_end(result, run)
+        try:
+            # 广度优先：每个组合先翻前 2 页，再一个组合一个组合往深翻（见 DriverContext.crawl_slots）
+            ctx.crawl_slots(result, specs, fetch, max_pages=cfg.max_pages)
         except Denied as exc:
             if is_graceful_stop(exc):
                 result.stopped = exc.reason
@@ -209,7 +205,7 @@ class Job51Driver:
             else:
                 raise
         finally:
-            for page in (page_obj, detail_page):
+            for page in pages.values():
                 release_page(page)   # 验证 / 掉登录的那一页留给你处理
         if skipped_cities and len(skipped_cities) == len(cfg.cities):
             result.stopped = ("配置的城市都不在内置表里：" + "、".join(skipped_cities)

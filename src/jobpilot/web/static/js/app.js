@@ -83,7 +83,7 @@ function renderPipeline(status) {
     {
       n: 2, label: '待确认', value: pending, unit: '个', filter: 'pending_confirm',
       sub: pending ? '你确认之后才会投递，这是最后一道人工闸门' : '没有在等你确认的岗位',
-      action: pending ? ['去确认', () => $('pending').scrollIntoView({ behavior: 'smooth', block: 'start' })] : null,
+      action: pending ? ['去确认', () => goConfirm()] : null,
       now: !!pending && !fresh, local: true,
     },
     {
@@ -329,6 +329,19 @@ function setRiskOpen(key, status) {
 }
 
 /* ---------------- 概览：待确认 ---------------- */
+/* 「去确认」：以前只是滚到待确认列表 —— 一屏概览里列表本来就在屏幕上，滚不动，看起来像没反应；
+   而且投递队列可能停在别的栏。现在：切到「待确认」栏 → 滚到能看见 → 卡片闪一下 → 焦点给第一条 */
+function goConfirm() {
+  state.queueTab = 'pending'; state.queuePinned = true;
+  if (state.status) renderPending(state.status);
+  const card = $('pendingCard');
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  card.classList.remove('is-flash'); void card.offsetWidth; card.classList.add('is-flash');
+  setTimeout(() => card.classList.remove('is-flash'), 1300);
+  const first = $('pending').querySelector('.pi-title, .pending-item button');
+  if (first) first.focus({ preventScroll: true });
+}
+
 /* 投递队列（2026-10-20）：待确认 / 已确认待投 / 今日已投 三栏。没有待确认时可以看另外两栏，
    卡片不再只剩一个空图标。默认打开第一个有内容的栏；你点过哪栏就停在哪栏（那栏空了再自动换） */
 const QUEUE_TABS = ['pending', 'approved', 'applied'];
@@ -629,6 +642,17 @@ function subLanes(lanes, paused) {
   return box;
 }
 
+/* 日志里的长链接（猎聘抓 JD 详情时整串 URL）只留岗位编号：https://www.liepin.com/a/80539809.shtml?… → 岗位 80539809 */
+function shortUrls(text) {
+  return String(text || '').replace(/https?:\/\/\S+/g, (url) => {
+    const id = url.match(/\/(?:job|a|jobdetail|jobs)\/([A-Za-z0-9_-]{5,})/) || url.match(/([0-9]{6,})/);
+    return id ? '岗位 ' + id[1] : (url.split('/')[2] || '链接');
+  });
+}
+function stripPlatform(text) {
+  return String(text || '').replace(/^(BOSS直聘|前程无忧|猎聘|智联招聘)[：:]\s*/, '');
+}
+
 function lane(task, status) {
   const run = taskRunning(task);
   const paused = taskPaused(task, status);
@@ -644,7 +668,7 @@ function lane(task, status) {
     el('span', { class: 'pill ' + info.cls, text: info.text }),
   ]);
   const split = Object.keys(task.lanes || {}).length > 0;
-  if ((run || task.mode === 'full') && !split) head.appendChild(stepper(task));
+  if (task.mode === 'full' && !split) head.appendChild(stepper(task));   // 只有一步的任务（单独采集 / 评分…）不画步骤条
   head.appendChild(el('div', { class: 'grow' }));
   head.appendChild(el('span', { class: 'tlane-clock mono', title: run ? '已用时' : '用时', text: elapsed(task) }));
   if (run) {
@@ -659,8 +683,10 @@ function lane(task, status) {
     // 跑完的收成一行：没做成写原因，做成了写最后一句
     const last = (task.logs || []).slice(-1)[0];
     // 跑完的收成一行（出错也是一行红字，悬停看全文），不再一个任务占一大块
-    const why = task.error || last || '任务已结束。';
+    const why = shortUrls(task.error || last || '任务已结束。');
     node.appendChild(el('div', { class: 'small tlane-sum' + (task.error ? ' is-bad' : ' muted'), text: why, title: why }));
+    node.appendChild(el('button', { class: 'btn ghost icon small tlane-x', type: 'button', 'aria-label': '从监控台移走这条已结束的任务',
+      title: '移走（记录页里还在）', onclick: () => dismissTask(task.id) }, [icon('x')]));
     return node;
   }
   const pct = p.total ? Math.min(100, Math.round(((p.current || 0) / p.total) * 100)) : null;
@@ -671,12 +697,13 @@ function lane(task, status) {
   // 分平台投递：总进度写成「已投 x / y」（正在投哪个岗位写在各平台那一行里）
   const sums = Object.values(task.lanes || {}).reduce((a, l) => [a[0] + (l.applied || 0), a[1] + (l.total || 0)], [0, 0]);
   node.appendChild(el('div', { class: 'tlane-foot' }, [
-    el('span', { class: 'tlane-label', text: split ? ('已投 ' + sums[0] + ' / ' + sums[1]) : (p.label || (paused ? '已暂停' : '运行中…')) }),
+    el('span', { class: 'tlane-label', text: split ? ('已投 ' + sums[0] + ' / ' + sums[1])
+      : shortUrls(p.label || (paused ? '已暂停' : stripPlatform(last) || '运行中…')) }),
     p.total ? el('span', { class: 'mono tlane-num', text: (p.current || 0) + ' / ' + p.total + ' · ' + pct + '%' }) : null,
   ]));
   const lanes = task.lanes || {};
   if (Object.keys(lanes).length) node.appendChild(subLanes(lanes, paused));
-  else if (last) node.appendChild(el('div', { class: 'tlane-log mono' }, [el('span', { text: last }), el('i', { class: 'tlane-caret', 'aria-hidden': 'true' })]));
+  else if (last && p.label) node.appendChild(el('div', { class: 'tlane-log mono' }, [el('span', { text: shortUrls(last), title: last }), el('i', { class: 'tlane-caret', 'aria-hidden': 'true' })]));
   return node;
 }
 
@@ -732,7 +759,7 @@ function renderTimeline(tasks) {
     list.appendChild(el('li', { class: 'tl-row' }, [
       el('time', { class: 'mono muted', text: r.at || '' }),
       el('span', { class: 'tl-tag tp-' + r.tone, text: r.name }),
-      el('span', { class: 'tl-text', text: r.line }),
+      el('span', { class: 'tl-text', text: shortUrls(r.line), title: r.line.length > 120 ? r.line : null }),
     ]));
   }
   if (atBottom) list.scrollTop = list.scrollHeight;
@@ -775,6 +802,78 @@ function renderTodayRuns(list) {
     onclick: () => switchView('activity') }));
 }
 
+/* 监控台里还该留着哪些已结束的任务（2026-10-21）：
+   - 同一个平台后来又开了任务（在跑或更晚开始的）→ 旧的移走（「所有平台」的任务和每个平台都算同一个平台）
+   - 正常完成的留 10 分钟；停止 / 出错的一直留着，直到被同平台的新任务替代或你点 × 关掉
+   移走的不会丢：「记录」页的任务历史、空闲时「今天跑过的任务」里都有 */
+const ENDED_OK_MS = 10 * 60 * 1000;
+function taskKeys(task) {
+  const many = (task.platforms && task.platforms.length) ? task.platforms
+    : String(task.platform || '').split(',').filter(Boolean);
+  return many.length ? many : ['*'];                    // 没写平台 = 所有平台
+}
+function overlaps(a, b) {
+  const ka = taskKeys(a); const kb = taskKeys(b);
+  return ka.includes('*') || kb.includes('*') || ka.some((k) => kb.includes(k));
+}
+function dismissedTasks() {
+  if (!state.dismissed) {
+    try { state.dismissed = new Set(JSON.parse(sessionStorage.getItem('jp.dismissedTasks') || '[]')); } catch (e) { state.dismissed = new Set(); }
+  }
+  return state.dismissed;
+}
+function dismissTask(id) {
+  dismissedTasks().add(id);
+  try { sessionStorage.setItem('jp.dismissedTasks', JSON.stringify([...state.dismissed].slice(-50))); } catch (e) { /* 隐私模式 */ }
+  if (state.status) renderTask(state.status);
+}
+function keptEnded(tasks) {
+  const gone = dismissedTasks();
+  return tasks.filter((t) => {
+    if (taskRunning(t) || gone.has(t.id)) return false;
+    const started = parseLocal(t.started_at) || 0;
+    if (tasks.some((o) => o !== t && overlaps(o, t) && (taskRunning(o) || (parseLocal(o.started_at) || 0) > started))) return false;
+    const ok = t.status === 'completed' && !t.error;
+    const end = parseLocal(t.finished_at);
+    return !(ok && end !== null && Date.now() - end > ENDED_OK_MS);
+  });
+}
+
+/* 采集被 1 小时 / 10 分钟开页上限打断后的自动续采（status.collect_resume），和「下次先补」（status.collect_carry）：
+   放在任务监控台最上面一行一行写清楚，续采可以取消 */
+function joinLabels(labels) {
+  const list = labels || [];
+  return list.slice(0, 3).join('、') + (list.length > 3 ? ' 等 ' + list.length + ' 个' : '');
+}
+function pendingWork(status) {
+  const box = el('div', { class: 'tpend' });
+  for (const [key, r] of Object.entries(status.collect_resume || {})) {
+    const mins = Math.max(1, Math.ceil((r.in_seconds || 0) / 60));
+    const when = r.in_seconds > 0 ? '约 ' + mins + ' 分钟后（' + String(r.at || '').slice(11, 16) + '）' : '马上';
+    const btn = el('button', { class: 'btn ghost small', type: 'button', text: '取消续采',
+      title: '不自动续采了（没采到的组合还会在下次采集时先补）',
+      onclick: () => withLoading(btn, async () => {
+        const res = await post('/api/collect/resume/cancel', { platform: key });
+        if (res && res.error) { toast(res.error, 'err'); return; }
+        toast('已取消' + platformName(key) + '的自动续采', 'ok'); refresh();
+      }) });
+    box.appendChild(el('div', { class: 'tpend-row tp-' + (PLATFORM_KEYS.includes(key) ? key : 'x') }, [
+      icon('clock'), el('b', { text: platformName(key) }),
+      el('span', { text: when + '自动接着' + (r.mode === 'full' ? '跑全流程' : '采') + '：' + joinLabels(r.labels) }),
+      r.reason ? el('span', { class: 'muted small', text: '（' + r.reason + '）' }) : null,
+      el('div', { class: 'grow' }), btn,
+    ]));
+  }
+  for (const [key, c] of Object.entries(status.collect_carry || {})) {
+    if ((status.collect_resume || {})[key]) continue;          // 已经在续采里写了
+    box.appendChild(el('div', { class: 'tpend-row is-carry tp-' + (PLATFORM_KEYS.includes(key) ? key : 'x') }, [
+      icon('inbox'), el('b', { text: platformName(key) }),
+      el('span', { class: 'muted', text: '上次没采到，下次采集会先补：' + joinLabels(c.labels) }),
+    ]));
+  }
+  return box.childElementCount ? box : null;
+}
+
 function renderTask(status) {
   const tasks = taskList(status);
   renderTaskButtons(status, tasks);
@@ -786,7 +885,8 @@ function renderTask(status) {
   clear(list);
   clear(prog);
   const live = tasks.filter(taskRunning);
-  const idle = !tasks.length;
+  const ended = keptEnded(tasks);
+  const idle = !live.length && !ended.length;
   $('ovWork').classList.toggle('no-task', idle);
   $('taskCard').classList.toggle('is-compact', idle);
   $('taskCard').classList.toggle('is-live', live.length > 0);
@@ -796,6 +896,8 @@ function renderTask(status) {
     pill.textContent = '空闲';
     meta.textContent = '';
     $('taskTimeline').hidden = true;
+    const waitingIdle = pendingWork(status);
+    if (waitingIdle) list.appendChild(waitingIdle);
     renderTodayRuns(list);
     return;
   }
@@ -803,16 +905,17 @@ function renderTask(status) {
   pill.textContent = live.length ? (live.length + ' 个运行中') : '空闲';
   meta.textContent = live.length ? '' : '最近的任务';
   // 在跑的排前面（按开始时间），跑完的排后面、收成一行
-  // 结束的只露最近 2 个，更早的收进「还有 N 个已结束」（点开再看）
-  const ended = tasks.filter((t) => !taskRunning(t));
+  // 结束的只露最近 2 个，更早的收进「还有 N 个已结束」（点开再看）；被替代 / 收走的不算
   const shownEnded = state.showEnded ? ended : ended.slice(0, live.length ? 1 : 2);
+  const waiting = pendingWork(status);
+  if (waiting) list.appendChild(waiting);
   for (const task of [...live, ...shownEnded]) list.appendChild(lane(task, status));
   if (ended.length > shownEnded.length || (state.showEnded && ended.length > 2)) {
     list.appendChild(el('button', { class: 'link small tlane-more', type: 'button',
       text: state.showEnded ? '收起已结束的任务' : '还有 ' + (ended.length - shownEnded.length) + ' 个已结束的任务',
       onclick: () => { state.showEnded = !state.showEnded; renderTask(state.status || status); } }));
   }
-  renderTimeline(tasks);
+  renderTimeline([...live, ...ended]);
 }
 
 /* ---------------- 岗位池：见 views/jobs.js ---------------- */

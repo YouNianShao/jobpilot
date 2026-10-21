@@ -19,7 +19,7 @@ from ..models import ApplyResult, CollectResult, Job, MonitorResult
 from ..safety.attention import release_page
 from ..safety.policy import Denied, is_graceful_stop
 from . import apply_probe
-from .base import DriverContext, _ago, explain_missing, stop_if_risky
+from .base import DriverContext, SlotSpec, explain_missing, stop_if_risky
 
 SEARCH_URL = "https://www.liepin.com/zhaopin/?key={kw}&curPage={page}"
 # 列表页拟人悬停的目标：岗位锚点（data-nick 是稳定属性）
@@ -104,74 +104,69 @@ class LiepinDriver:
             return result
 
         wanted = {c.strip() for c in cfg.cities if c.strip()}
-        page_obj = None
-        detail_page = None
+        pages: dict[str, object] = {"search": None, "detail": None}
         detail_exhausted = False
-        try:
-            for keyword in cfg.keywords:
-                slot = keyword
-                run = ctx.slot_begin(slot, keyword, "", cfg.max_pages)
-                for page_no in range(1, run.limit + 1):
-                    recent = ctx.skip_recently_collected(slot, page_no)
-                    if recent is not None:
-                        result.skipped += 1
-                        ctx.log(f"[liepin] {keyword} 第 {page_no} 页 {_ago(recent)}采过，跳过")
-                        continue
-                    ctx.stop.check()
-                    ctx.reserve("collect_search")
-                    url = search_url(keyword, page_no)
-                    if page_obj is None:
-                        page_obj = ctx.browser.open(url)
-                    else:
-                        page_obj.goto(url)
-                    if not page_obj.wait_for('[data-nick="job-detail-job-info"]', timeout_ms=30000):
-                        explain_missing(page_obj, f"[liepin] 搜索页 {keyword}")
+        specs = [SlotSpec(keyword, keyword) for keyword in cfg.keywords]   # 猎聘按关键词搜、本地按城市过滤
 
-                    items = parse_list(page_obj.eval(JS_LIST))
-                    if not items:
-                        break
-                    result.seen += len(items)
-                    new_before = result.new
-                    ctx.log(f"[liepin] {keyword} 第 {page_no} 页 {len(items)} 条")
-                    # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
-                    humanize.after_list(ctx, page_obj, CARD_SELECTOR)
+        def fetch(spec: SlotSpec, run, page_no: int) -> tuple[int, int] | None:
+            nonlocal detail_exhausted
+            keyword = spec.keyword
+            ctx.reserve("collect_search")
+            url = search_url(keyword, page_no)
+            if pages["search"] is None:
+                pages["search"] = ctx.browser.open(url)
+            else:
+                pages["search"].goto(url)
+            page_obj = pages["search"]
+            if not page_obj.wait_for('[data-nick="job-detail-job-info"]', timeout_ms=30000):
+                explain_missing(page_obj, f"[liepin] 搜索页 {keyword}")
 
-                    for item in items:
-                        ctx.stop.check()
-                        city = (item.get("city") or "").split("-")[0].strip()
-                        if wanted and city and not any(w in city or city in w for w in wanted):
-                            result.filtered += 1
-                            continue
-                        job_id = make_job_id(item)
-                        if ctx.repo.get_job(job_id):
-                            result.duplicate += 1
-                            continue
-                        jd = ""
-                        if cfg.fetch_detail and not detail_exhausted:
-                            try:
-                                jd, detail_page = self._fetch_jd(ctx, detail_page, item.get("url", ""))
-                            except Denied as exc:
-                                if exc.kind in {"budget", "rate"}:
-                                    detail_exhausted = True
-                                    ctx.log("[liepin] 详情页预算用尽，后续只采列表字段（JD 留空）")
-                                else:
-                                    raise
-                        inserted, _ = ctx.repo.upsert_job(Job(
-                            id=job_id, platform=self.key,
-                            external_id=str(item.get("jobId") or ""),
-                            title=item.get("title", ""), company=item.get("company", ""),
-                            salary=item.get("salary", ""), city=city,
-                            url=item.get("url", ""), jd=jd,
-                        ))
-                        if inserted:
-                            result.new += 1
-                            ctx.repo.add_event(job_id, "collected", keyword)
+            items = parse_list(page_obj.eval(JS_LIST))
+            if not items:
+                return None
+            result.seen += len(items)
+            new_before = result.new
+            ctx.log(f"[liepin] {keyword} 第 {page_no} 页 {len(items)} 条")
+            # 先解析再扫一眼：滚动 / 悬停不会影响已经拿到的列表
+            humanize.after_list(ctx, page_obj, CARD_SELECTOR)
+
+            for item in items:
+                ctx.stop.check()
+                city = (item.get("city") or "").split("-")[0].strip()
+                if wanted and city and not any(w in city or city in w for w in wanted):
+                    result.filtered += 1
+                    continue
+                job_id = make_job_id(item)
+                if ctx.repo.get_job(job_id):
+                    result.duplicate += 1
+                    continue
+                jd = ""
+                if cfg.fetch_detail and not detail_exhausted:
+                    try:
+                        jd, pages["detail"] = self._fetch_jd(ctx, pages["detail"], item.get("url", ""))
+                    except Denied as exc:
+                        if exc.kind in {"budget", "rate"}:
+                            detail_exhausted = True
+                            ctx.log("[liepin] 详情页预算用尽，后续只采列表字段（JD 留空）")
                         else:
-                            result.duplicate += 1
-                    ctx.note_collect(slot, page_no)
-                    if ctx.slot_page(run, page_no, seen=len(items), new=result.new - new_before):
-                        break
-                ctx.slot_end(result, run)
+                            raise
+                inserted, _ = ctx.repo.upsert_job(Job(
+                    id=job_id, platform=self.key,
+                    external_id=str(item.get("jobId") or ""),
+                    title=item.get("title", ""), company=item.get("company", ""),
+                    salary=item.get("salary", ""), city=city,
+                    url=item.get("url", ""), jd=jd,
+                ))
+                if inserted:
+                    result.new += 1
+                    ctx.repo.add_event(job_id, "collected", keyword)
+                else:
+                    result.duplicate += 1
+            return len(items), result.new - new_before
+
+        try:
+            # 广度优先：每个关键词先翻前 2 页，再一个一个往深翻（见 DriverContext.crawl_slots）
+            ctx.crawl_slots(result, specs, fetch, max_pages=cfg.max_pages)
         except Denied as exc:
             if is_graceful_stop(exc):
                 result.stopped = exc.reason
@@ -179,7 +174,7 @@ class LiepinDriver:
             else:
                 raise
         finally:
-            for page in (page_obj, detail_page):
+            for page in pages.values():
                 release_page(page)   # 验证 / 掉登录的那一页留给你处理
         return result
 

@@ -10,7 +10,9 @@ from .context import ServiceContext
 
 
 def collect(ctx: ServiceContext, platform: str, *, registry=None,
-            keywords=None, cities=None, max_pages=None) -> dict:
+            keywords=None, cities=None, max_pages=None, slots=None, resume_mode: str = "collect") -> dict:
+    """``slots``：只采这几个组合（组合键，如 ``"上海|AI"``；自动续采用）。``resume_mode``：被速率窗口
+    拦在半路时，自动续采该起什么任务（单独采集 = "collect"，全流程里的采集 = "full"）。"""
     registry = registry or build_default_registry()
     driver = registry.get(platform)
     if driver is None or not supports(driver, "collect"):
@@ -44,7 +46,11 @@ def collect(ctx: ServiceContext, platform: str, *, registry=None,
 
     browser = ctx.create_browser()
     try:
-        result = driver.collect(ctx.driver_context(browser, platform))
+        dctx = ctx.driver_context(browser, platform)
+        if slots:
+            dctx.only_slots = [str(item) for item in slots if str(item).strip()]
+            ctx.log(f"[{platform}] 这次只采 {len(dctx.only_slots)} 个组合（接着上次没采完的）")
+        result = driver.collect(dctx)
     except PlatformRisk as exc:
         until = ctx.policy.record_risk(platform, exc.kind, exc.detail)
         ctx.repo.add_event(None, "risk", f"{platform} {exc.kind}")
@@ -80,7 +86,33 @@ def collect(ctx: ServiceContext, platform: str, *, registry=None,
         # 翻页省预算：提前结束的组合数 / 少翻的页数 / 每个组合的新岗位率（看哪个组合该换词）
         "early_stopped": result.early_stopped, "pages_saved": result.pages_saved,
         "slots": list(result.slots),
+        # 没轮到的组合（额度 / 速率停手；已进「下次先补」）/ 这次先补的上次没采到的组合
+        "missed": list(result.missed),
+        "carried": list(result.carried),
+        "resume_at": "",
     }
+    if result.stop_kind != "rate" and not slots:
+        # 完整跑过一轮（或因额度 / 冷却停手）：之前记的待续采已经没有意义，别让它再自己起一个任务
+        from .auto_resume import clear_resume, read_resume
+
+        if read_resume(ctx.repo, platform) is not None:
+            clear_resume(ctx.repo, platform)
+    if result.stop_kind == "rate":
+        # 速率窗口（10 分钟 / 1 小时）停手：窗口重新打开后自动接着采没采完的组合（services/auto_resume.py）
+        pending = list(dict.fromkeys([*result.partial_slots, *result.missed_slots]))
+        names = dict(zip([*result.partial_slots, *result.missed_slots], [*result.partial, *result.missed], strict=False))
+        if pending:
+            from .auto_resume import read_resume, record_resume
+
+            payload["resume_at"] = record_resume(
+                ctx.repo, ctx.policy, platform, mode=resume_mode, slots=pending,
+                labels=[names[key] for key in pending], options=overrides)
+            payload["resume_slots"] = len(pending)
+            record = read_resume(ctx.repo, platform) or {}
+            payload["resume_window"] = record.get("window") or "1 小时"
+            payload["resume_in_minutes"] = max(1, round(
+                (float(record.get("not_before") or 0) - float(record.get("created_at") or 0)) / 60))
+            ctx.log(f"[{platform}] 窗口重新打开后（约 {payload['resume_at'][11:16]}）自动接着采 {len(pending)} 个组合")
     if result.early_stopped or result.pages_saved:
         ctx.log(f"[{platform}] 有 {result.early_stopped} 个组合提前结束，这次少翻了 {result.pages_saved} 页")
     if overrides:

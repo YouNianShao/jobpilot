@@ -107,6 +107,105 @@ class SlotRun:
     gaps: bool = False   # 中间有「刚采过、跳过」的页：那几页有没有新岗位不知道
 
 
+# 每个平台上次采集停在哪个组合之后（下一轮从它的下一个开始）/ 上次没轮到、要先补的组合
+CURSOR_KEY = "collect:cursor:{platform}"
+CARRY_KEY = "collect:carry:{platform}"
+CARRY_KEEP_DAYS = 3.0
+#: 广度优先第一轮：每个组合先翻前几页（再一个组合一个组合往深翻）
+SHALLOW_PAGES = 2
+#: 这些停手原因下没轮到的组合记成「没采到」、下次先补（额度用完 / 速率窗口）
+MISS_KINDS = frozenset({"budget", "rate"})
+_TS = "%Y-%m-%d %H:%M:%S"
+
+
+@dataclass
+class SlotSpec:
+    """驱动交给共享调度器的一个 关键词×城市 组合。"""
+
+    slot: str            # 组合键（翻页水位 / 深度记忆 / 游标都用它）
+    keyword: str
+    city: str = ""       # 平台没有城市维度（猎聘）就留空
+    data: object = None  # 驱动自己的东西（例如城市码）
+
+    @property
+    def name(self) -> str:
+        return f"{self.keyword} · {self.city}" if self.city else self.keyword
+
+
+def read_carry(repo: Repo, platform: str, *, now: datetime | None = None) -> dict:
+    """上次没采到、要先补的组合：{slots: [...], labels: [...], since: str}；过期（3 天）/ 没有 = {}。"""
+    raw = repo.get_kv(CARRY_KEY.format(platform=platform))
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        since = datetime.strptime(str(data.get("since") or ""), _TS)
+    except (ValueError, TypeError, AttributeError):
+        return {}
+    if ((now or datetime.now()) - since).total_seconds() > CARRY_KEEP_DAYS * 86400:
+        return {}
+    slots = [str(s) for s in data.get("slots") or []]
+    labels = [str(s) for s in data.get("labels") or []]
+    if not slots:
+        return {}
+    labels = (labels + slots[len(labels):])[:len(slots)]
+    return {"slots": slots, "labels": labels, "since": data.get("since")}
+
+
+def write_carry(repo: Repo, platform: str, slots: list[str], labels: list[str], since: str | None = None) -> None:
+    """整体写回（空 = 清掉）。"""
+    key = CARRY_KEY.format(platform=platform)
+    if not slots:
+        repo.set_kv(key, "")
+        return
+    repo.set_kv(key, json.dumps({"slots": list(slots), "labels": list(labels),
+                                 "since": since or datetime.now().strftime(_TS)}, ensure_ascii=False))
+
+
+class SlotSession:
+    """一次采集的组合级账本：with 块里被 ``Denied`` 打断时记下没轮到的组合、并进「下次先补」；
+    不管怎么结束都把轮转游标停在最后真正开过页的组合上。"""
+
+    def __init__(self, ctx: DriverContext, result: CollectResult, order: list[SlotSpec]) -> None:
+        self.ctx, self.result, self.order = ctx, result, order
+        self.runs: dict[str, SlotRun] = {}   # crawl_slots 填：停在半路时补记新岗位率 / 深度
+        self.done: set[str] = set()
+        self._opened: set[str] = set()
+        self._cursor = ""
+
+    def opened(self, slot: str) -> None:
+        """这个组合这次真的开过一页了。"""
+        self._cursor = slot
+        if slot not in self._opened:
+            self._opened.add(slot)
+            self.ctx._carry_done(slot)
+
+    def __enter__(self) -> SlotSession:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        from ..safety.policy import Denied
+
+        try:
+            if isinstance(exc, Denied):
+                self.result.stop_kind = exc.kind
+            if isinstance(exc, Denied) and exc.kind in MISS_KINDS:
+                for spec in self.order:
+                    if spec.slot in self.runs and spec.slot not in self.done:
+                        self.ctx.slot_end(self.result, self.runs[spec.slot], finished=False)  # 停在半路：深度只往深记
+                        if spec.slot in self._opened:
+                            self.result.partial.append(spec.name)
+                            self.result.partial_slots.append(spec.slot)
+                    if spec.slot not in self._opened:
+                        self.result.missed.append(spec.name)
+                        self.result.missed_slots.append(spec.slot)
+                self.ctx._carry_add(self.result)
+        finally:
+            if self._cursor and self.ctx.only_slots is None:
+                self.ctx.repo.set_kv(CURSOR_KEY.format(platform=self.ctx.platform), self._cursor)
+        return False
+
+
 @dataclass
 class DriverContext:
     """平台驱动能用到的一切（不包含任何平台细节）。
@@ -122,6 +221,103 @@ class DriverContext:
     platform: str = ""
     log: Callable[[str], None] = lambda message: None
     progress: Callable[[int, int, str], None] = lambda current, total, label: None
+    # 只采这几个组合（自动续采 / 手动指定）；None = 全部组合
+    only_slots: list[str] | None = None
+
+    # ---------------- 组合调度：广度优先 + 轮转 + 补采 ----------------
+    # 实测（账号 B）：每次采集都被 1 小时开页上限 / 当日搜索额度拦在半路。以前每个组合从第 1 页翻到
+    # 第 N 页、组合顺序固定 —— 额度全花在前几个组合的深页（大多是重复）上，后面的组合永远轮不到。
+    def slot_order(self, specs: list[SlotSpec], result: CollectResult | None = None) -> list[SlotSpec]:
+        """这次按什么顺序采：指定了组合就只采那些；上次没采到的排最前；其余从上次停下的下一个开始。"""
+        if self.only_slots is not None:
+            wanted = list(dict.fromkeys(str(s) for s in self.only_slots))
+            by_key = {spec.slot: spec for spec in specs}
+            return [by_key[key] for key in wanted if key in by_key]
+        order = list(specs)
+        cursor = self.repo.get_kv(CURSOR_KEY.format(platform=self.platform)) or ""
+        keys = [spec.slot for spec in order]
+        if cursor in keys:
+            start = keys.index(cursor) + 1
+            order = order[start:] + order[:start]
+        carry = read_carry(self.repo, self.platform)
+        carried = [key for key in carry.get("slots", []) if key in keys]
+        if carried:
+            front = [spec for key in carried for spec in order if spec.slot == key]
+            order = front + [spec for spec in order if spec.slot not in carried]
+            if result is not None:
+                result.carried = [spec.name for spec in front]
+            self.log(f"[{self.platform}] 先补上次没采到的：" + "、".join(spec.name for spec in front))
+        return order
+
+    def slot_session(self, result: CollectResult, specs: list[SlotSpec]) -> SlotSession:
+        """组合级账本（排序 / 轮转游标 / 补采 / 没轮到的组合），给不走 crawl_slots 的驱动（智联）用。"""
+        return SlotSession(self, result, self.slot_order(specs, result))
+
+    def crawl_slots(self, result: CollectResult, specs: list[SlotSpec],
+                    fetch: Callable[[SlotSpec, SlotRun, int], tuple[int, int] | None],
+                    *, max_pages: int, shallow: int | None = None) -> None:
+        """共享翻页调度：第一轮每个组合翻前 ``shallow`` 页，第二轮再一个组合一个组合往深翻。
+
+        ``fetch(spec, run, page_no)`` 开第 page_no 页（自己 ``reserve``）、处理完返回 ``(seen, new)``；
+        返回 None = 这个组合到底了（没有结果）。「刚采过、跳过」/ 记水位 / 提前结束 / 深度记忆都在这里做，
+        驱动只管开页面和入库。``Denied`` 原样往上抛，抛之前记下没轮到的组合（``result.missed``）、
+        把轮转游标停在最后真正开过页的组合上（下次从它的下一个开始）。
+        """
+        shallow = SHALLOW_PAGES if shallow is None else max(1, int(shallow))
+        runs: dict[str, SlotRun] = {}
+        done: set[str] = set()       # 到底 / 提前结束 / 翻满
+        with self.slot_session(result, specs) as session:
+            session.runs, session.done = runs, done
+            for depth_pass in (1, 2):
+                for spec in session.order:
+                    if spec.slot in done:
+                        continue
+                    run = runs.get(spec.slot)
+                    if run is None:
+                        run = runs[spec.slot] = self.slot_begin(spec.slot, spec.keyword, spec.city, max_pages)
+                    cut = min(run.limit, shallow)
+                    pages = range(1, cut + 1) if depth_pass == 1 else range(cut + 1, run.limit + 1)
+                    finished = False
+                    for page_no in pages:
+                        recent = self.skip_recently_collected(spec.slot, page_no)
+                        if recent is not None:
+                            result.skipped += 1
+                            self.log(f"[{self.platform}] {run.label} 第 {page_no} 页 {_ago(recent)}采过，跳过")
+                            continue
+                        self.stop.check()
+                        got = fetch(spec, run, page_no)
+                        session.opened(spec.slot)
+                        self.note_collect(spec.slot, page_no)   # 处理完才记（没有结果也算采过）；被打断就不记
+                        if got is None:
+                            finished = True
+                            break
+                        seen, new = got
+                        if self.slot_page(run, page_no, seen=seen, new=new):
+                            finished = True
+                            break
+                    if finished or depth_pass == 2 or cut >= run.limit:
+                        done.add(spec.slot)
+                        self.slot_end(result, run)
+
+    def _carry_done(self, slot: str) -> None:
+        """这个组合这次真的开过页了：从「要先补的」里划掉。"""
+        carry = read_carry(self.repo, self.platform)
+        if slot not in carry.get("slots", []):
+            return
+        pairs = [(s, n) for s, n in zip(carry["slots"], carry["labels"], strict=False) if s != slot]
+        write_carry(self.repo, self.platform, [s for s, _ in pairs], [n for _, n in pairs], carry.get("since"))
+
+    def _carry_add(self, result: CollectResult) -> None:
+        """停在半路：没轮到的组合并进「下次先补」（保持顺序，已有的排前面）。"""
+        if not result.missed_slots:
+            return
+        carry = read_carry(self.repo, self.platform)
+        slots, labels = list(carry.get("slots", [])), list(carry.get("labels", []))
+        for slot, name in zip(result.missed_slots, result.missed, strict=False):
+            if slot not in slots:
+                slots.append(slot)
+                labels.append(name)
+        write_carry(self.repo, self.platform, slots, labels, carry.get("since"))
 
     # ---------------- 采集去重（别为了同样的结果重复开页面） ----------------
     def collect_seen_seconds(self, slot: str, page: int) -> float | None:
@@ -211,12 +407,17 @@ class DriverContext:
                  f"提前结束这个组合（省下 {run.limit - page_no} 页）")
         return True
 
-    def slot_end(self, result: CollectResult, run: SlotRun) -> None:
-        """组合翻完（含提前结束 / 到底）：记总数、记每组合的新岗位率、更新深度记忆。"""
+    def slot_end(self, result: CollectResult, run: SlotRun, *, finished: bool = True) -> None:
+        """组合翻完（含提前结束 / 到底）：记总数、记每组合的新岗位率、更新深度记忆。
+
+        ``finished=False``：被额度 / 速率停在半路 —— 只记新岗位率、深度只往深记，
+        不算「完整翻过一次」（否则没翻完的组合会被记成浅深度、下次少翻）。
+        """
         if run.stopped_at:
             result.early_stopped += 1
             result.pages_saved += run.limit - run.stopped_at
-        result.pages_saved += run.max_pages - run.limit      # 按上次深度封顶少翻的页
+        if finished:
+            result.pages_saved += run.max_pages - run.limit      # 按上次深度封顶少翻的页
         if run.pages <= 0:                                   # 全是「刚采过」跳过的页：什么都不知道，不改记忆
             return
         result.slots.append({"slot": run.slot, "label": run.name, "seen": run.seen,
@@ -224,7 +425,7 @@ class DriverContext:
         if float(getattr(self.config.safety, "full_recrawl_days", 3.0) or 0) <= 0:
             return
         record = self._depth_record(run.slot) or {}
-        if run.full:
+        if run.full and finished:
             depth = run.deepest_new
             if run.gaps:                                # 有跳过的页：别把深度记浅了
                 depth = max(depth, int(record.get("depth") or 0))

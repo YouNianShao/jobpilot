@@ -124,3 +124,17 @@
 .today-head { margin-bottom: 2px; }
 .tlane.is-done.is-bad::before { background: var(--bad); opacity: .8; }
 .tlane.is-done > .tlane-clock { flex: none; color: var(--muted); font-size: var(--fs-sm); }
+
+/* 已结束任务的 ×（移走；记录页里还在） */
+.tlane.is-done > .tlane-x { flex: none; width: 24px; height: 24px; margin: -4px -6px -4px 0; opacity: .55; }
+.tlane.is-done:hover > .tlane-x, .tlane-x:focus-visible { opacity: 1; }
+.tlane-x svg { width: 12px; height: 12px; }
+
+/* 自动续采 / 下次先补：监控台最上面，一行一个平台 */
+.tpend { display: grid; gap: 4px; }
+.tpend-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 12px; border-radius: var(--r-sm);
+  font-size: var(--fs-sm); background: color-mix(in srgb, var(--lane) 8%, transparent); box-shadow: inset 2px 0 0 var(--lane); }
+.tpend-row > b { color: var(--lane); white-space: nowrap; }
+.tpend-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpend-row .ico { width: 14px; height: 14px; color: var(--lane); flex: none; }
+.tpend-row.is-carry { background: transparent; }

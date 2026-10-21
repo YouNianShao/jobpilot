@@ -223,6 +223,10 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
     from ..services.auto_monitor import schedule as monitor_schedule
 
     app.state.auto_monitor = AutoMonitor(ctx_factory, tasks) if auto_monitor else None
+    # 自动续采（速率窗口停手后到点接着采）：和自动监测一样只在 run_server 里启动
+    from ..services import auto_resume
+
+    app.state.auto_resume = auto_resume.AutoResume(ctx_factory, tasks) if auto_monitor else None
 
     def with_ctx(fn):
         ctx = ctx_factory()
@@ -291,6 +295,11 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 "active_window_open": in_send_window(ctx.config.safety.active_windows),
                 "active_windows": list(ctx.config.safety.active_windows or []),
                 "idle_shutdown_minutes": app.state.idle_shutdown_minutes,
+                # 被速率窗口停在半路、到点自动接着采的平台 / 上次没采到、下次先补的组合
+                "collect_resume": auto_resume.resume_status(
+                    ctx.repo, registry.keys(),
+                    waiting=getattr(app.state.auto_resume, "waiting", None)),
+                "collect_carry": auto_resume.carry_status(ctx.repo, registry.keys()),
             }
 
         return with_ctx(build)
@@ -807,6 +816,16 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
     async def resume_task(request: Request, id: str = ""):
         return _control(tasks.resume, await _task_id(request, id))
 
+    @app.post("/api/collect/resume/cancel")
+    def cancel_collect_resume(body: RiskResumeBody):
+        """不要自动接着采了：删掉这个平台的待续采（「下次先补」的组合照旧保留）。"""
+        def run(ctx: ServiceContext):
+            auto_resume.clear_resume(ctx.repo, body.platform)
+            ctx.repo.add_event(None, "collect_resume", f"{body.platform} 你取消了自动续采")
+            return {"ok": True}
+
+        return with_ctx(run)
+
     @app.post("/api/risk/resume")
     def risk_resume(body: RiskResumeBody):
         """「我已处理，继续」：你在调试浏览器里过了验证 / 重新登录后点它。只解验证码锁和掉登录提醒，降速保留。
@@ -1095,11 +1114,12 @@ def run_server(host: str = "127.0.0.1", port: int = 8700, idle_shutdown_minutes:
                 return
 
     threading.Thread(target=watchdog, daemon=True).start()
-    scheduler = getattr(app.state, "auto_monitor", None)
-    if scheduler is not None:
-        scheduler.start()        # 自动监测：只在真的起看板时启动（见 create_app）
+    schedulers = [s for s in (getattr(app.state, "auto_monitor", None),
+                              getattr(app.state, "auto_resume", None)) if s is not None]
+    for scheduler in schedulers:
+        scheduler.start()        # 自动监测 / 自动续采：只在真的起看板时启动（见 create_app）
     try:
         server.run()
     finally:
-        if scheduler is not None:
+        for scheduler in schedulers:
             scheduler.stop()
