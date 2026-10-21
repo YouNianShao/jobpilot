@@ -63,7 +63,9 @@ function renderPipeline(status) {
   const busyApply = applyPlatforms().map(([key]) => key).filter((key) => busy.has(key));
   const blockers = {
     // 「所有平台轮流投」：有能投的平台在跑就先不让点，简单可预期；提示里写明是哪个
-    apply: (legacy || busyApply.length) ? (busyApply.map(platformName).join('、') || '有任务') + ' 正在跑任务' : '',
+    // 所有平台轮流投：后端会跳过正被占着的平台（2026-10-21），所以只有「能投的平台全都在忙」才不让点
+    apply: (legacy || (busyApply.length && busyApply.length === applyPlatforms().length))
+      ? (busyApply.map(platformName).join('、') || '有任务') + ' 正在跑任务' : '',
   };
   const applied = status.applied_today ?? 0;
   const limit = status.daily_limit ?? 30;
@@ -119,6 +121,8 @@ function renderPipeline(status) {
    布局 C（2026-10-16）：风控卡片占满一行，4 个平台并排成 4 张小卡 —— 横向一眼比较哪个平台快到上限。
    每张小卡只放结论：能不能开页 + 三格关键数字 + 降速 / 冷却提示。
    明细（四项额度 + 两个速率窗口）只有一条，展开在小卡下面，用小三角指着是哪个平台的。 */
+/* 风控锁的类型说人话（后端存的是英文代号） */
+const LOCK_KIND = { blocked: '被平台拦截', captcha: '出现验证', rate_limit: '访问太频繁', login: '掉登录' };
 function riskTight(remain, limits) {
   // 最紧的一项：所有额度里剩余比例最小的那个 —— 它就是最先卡住你的闸门
   let tight = null;
@@ -300,7 +304,7 @@ function renderRisk(status) {
     }
     if (lock) {
       tile.appendChild(el('span', { class: 'lock' }, [
-        icon('alert'), '冷却中：' + (lock.kind || '风控') + '，约 ' + (lock.remaining_minutes ?? '-') + ' 分钟',
+        icon('alert'), '冷却中：' + (LOCK_KIND[lock.kind] || lock.kind || '风控') + '，约 ' + (lock.remaining_minutes ?? '-') + ' 分钟后自动恢复',
       ]));
     }
     const need = (status.attention || []).find((item) => item.platform === key);

@@ -83,3 +83,18 @@ def test_resume_import_rejects_unsupported_and_scans(client):
     assert http.post("/api/resume/import?filename=a.exe", content=b"MZ").status_code == 400
     res = http.post("/api/resume/import?filename=scan.pdf", content=make_pdf([]))
     assert res.status_code == 400 and "扫描件" in res.json()["error"]
+
+
+def test_per_platform_safety_override_saves_without_wiping_others(client):
+    """配置页「平台」分组里改 BOSS 自己的每日搜索页：整份 safety.platforms 带上，猎聘的单独设置不能被抹掉；
+    全局「每日搜索页预算」只对没有单独设置的平台生效（2026-10-21 用户以为改了 100 没生效）"""
+    http, path = client
+    from jobpilot.config import AppConfig, load_config
+    base = AppConfig().model_dump()["safety"]["platforms"]
+    base["boss"]["daily_pages"]["collect_search"] = 100
+    res = http.post("/api/config", json={"safety": {"platforms": base, "daily_pages": {**AppConfig().safety.daily_pages.model_dump(), "collect_search": 100}}})
+    assert res.json()["ok"] is True
+    saved = load_config(path)
+    assert saved.safety.pages_for("boss").collect_search == 100
+    assert saved.safety.pages_for("liepin").collect_search == 30          # 猎聘的单独值还在
+    assert saved.safety.pages_for("51job").collect_search == 100          # 没单独设置 → 用全局

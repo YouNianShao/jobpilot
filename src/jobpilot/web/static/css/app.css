@@ -1162,3 +1162,7 @@ details.tech[open] > summary::before { content: '▾ '; }
 .dot-new { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft); vertical-align: middle; }
 @media (max-width: 760px) { .mon-q input { min-width: 0; width: 100%; } .mon-q { flex: 1 1 100%; } .mon-auto { max-width: 100%; } }
+
+/* 配置页「平台」分组里的「这个平台的风控」（单独上限，优先于全局） */
+.own-risk { margin-top: 14px; padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: var(--r); display: grid; gap: 10px; }
+.own-risk-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }

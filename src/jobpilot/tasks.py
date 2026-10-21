@@ -314,6 +314,25 @@ class TaskRunner:
             if problem:
                 refuse(TaskNotRunnable(problem))
             claims = claims_of(ctx.config, mode, platform, options, registry)
+            skipped_busy: list[str] = []
+            if mode == "apply" and not platform and options.get("platforms") is None:
+                # 「所有平台轮流投」（2026-10-21）：以前占住每个能投的平台，智联在采集时整个投递都开不了，
+                # 哪怕要投的岗位全在别的平台。现在只投有已确认岗位、此刻没被别的任务占着的平台；
+                # 被占着的跳过并在日志里写明，一个都投不了才拒绝
+                busy = set()
+                for tid in self._running_ids():
+                    busy |= set(self._claims.get(tid, frozenset()))
+                waiting = {key for key in claims
+                           if ctx.repo.list_jobs(platform=key, status="approved", limit=1)}
+                skipped_busy = sorted(waiting & busy)
+                usable = sorted(waiting - busy)
+                if not usable:
+                    if skipped_busy:
+                        names = "、".join(readable.platform_name(k) for k in skipped_busy)
+                        refuse(TaskAlreadyRunning(f"有已确认岗位的平台（{names}）正在跑别的任务，等它结束再投"))
+                    refuse(TaskNotRunnable("没有已确认、等着投的岗位"))
+                options = {**options, "platforms": usable}
+                claims = frozenset(usable)
             for tid in self._running_ids():
                 clash = claims & self._claims.get(tid, frozenset())
                 if clash:
@@ -335,6 +354,9 @@ class TaskRunner:
             self._tasks[task.id], self._ctxs[task.id], self._claims[task.id] = task, ctx, claims
             self._order.append(task.id)
             self._forget_old()
+            if skipped_busy:
+                task.log("这些平台正在跑别的任务，这次先不投（等它们结束再投一次）："
+                         + "、".join(readable.platform_name(k) for k in skipped_busy))
             self._persist(ctx, task)
             thread = threading.Thread(target=self._work, args=(ctx, task), daemon=True)
             self._threads[task.id] = thread

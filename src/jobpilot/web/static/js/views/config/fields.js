@@ -90,7 +90,7 @@ export const GROUPS = [
       ['safety.day_off_probability', '随机休息日概率(0-1)', 'number'],
       ['safety.send_windows', '允许投递的时段', 'windows'],
       ['safety.active_windows', '允许开页面的时段', 'windows'],
-      ['safety.daily_pages.collect_search', '每日搜索页预算', 'number'],
+      ['safety.daily_pages.collect_search', '每日搜索页预算（BOSS / 猎聘有单独设置的，在「平台」分组里改）', 'number'],
       ['safety.daily_pages.collect_detail', '每日详情页预算', 'number'],
       ['safety.daily_pages.apply', '每日投递页预算', 'number'],
       ['safety.daily_pages.monitor', '每日监测页预算', 'number'],

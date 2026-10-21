@@ -185,6 +185,33 @@ function renderConfig() {
     shortRow.appendChild(capField);
     body.appendChild(shortRow);
 
+    // 这个平台的单独风控（2026-10-21）：BOSS / 猎聘默认有自己的每日页数和速率上限，
+    // 会盖过「风控」分组里的全局值 —— 以前这里看不到，改全局「每日搜索页预算」只对没有单独设置的平台生效，让人以为没保存上
+    const own = ((cfg.safety || {}).platforms || {})[key] || null;
+    const ownPages = (own && own.daily_pages) || null;
+    const g = (cfg.safety || {});
+    const riskBox = el('div', { class: 'own-risk' });
+    riskBox.appendChild(el('div', { class: 'own-risk-head' }, [
+      el('b', { text: '这个平台的风控' }),
+      el('span', { class: 'muted small', text: ownPages
+        ? '这个平台有单独的上限，优先于「风控」分组里的全局值；清空某一格 = 用全局值'
+        : '没有单独设置，用「风控」分组里的全局值；填了就只对这个平台生效' }),
+    ]));
+    const ownRow = el('div', { class: 'frow-fields' });
+    const ownField = (path, label, value, global) => {
+      const f = configField(path, label, 'number', value ?? '');
+      f.querySelector('input').placeholder = '全局 ' + (global ?? '—');
+      return f;
+    };
+    const gp = g.daily_pages || {};
+    ownRow.appendChild(ownField('safety.own.collect_search', '每日搜索页', ownPages && ownPages.collect_search, gp.collect_search));
+    ownRow.appendChild(ownField('safety.own.collect_detail', '每日详情页', ownPages && ownPages.collect_detail, gp.collect_detail));
+    ownRow.appendChild(ownField('safety.own.total', '每日总页面', ownPages && ownPages.total, gp.total));
+    ownRow.appendChild(ownField('safety.own.max_pages_per_hour', '每小时页面上限', own && own.max_pages_per_hour, g.max_pages_per_hour));
+    ownRow.appendChild(ownField('safety.own.max_pages_per_10min', '近 10 分钟页面上限', own && own.max_pages_per_10min, g.max_pages_per_10min));
+    riskBox.appendChild(ownRow);
+    body.appendChild(riskBox);
+
     const wideRow = el('div', { class: 'frow-wide' });
     wideRow.appendChild(el('div', { class: 'field wide' }, [
       el('span', { class: 'label', text: '城市' }),
@@ -366,6 +393,23 @@ async function saveConfig() {
       cities: splitList(($('cfg::platform.cities') || {}).value),
       keywords: splitList($('cfg::platform.keywords').value),
     });
+  }
+  if (state.cfgPlatform && $('cfg::safety.own.collect_search')) {
+    const key = state.cfgPlatform;
+    const all = JSON.parse(JSON.stringify(((state.config || {}).safety || {}).platforms || {}));
+    const prev = all[key] || {};
+    const num = (id) => { const raw = String(($('cfg::safety.own.' + id) || {}).value || '').trim(); return raw === '' ? null : Number(raw); };
+    const gp = (((state.config || {}).safety || {}).daily_pages) || {};
+    const pages = { collect_search: num('collect_search'), collect_detail: num('collect_detail'), total: num('total') };
+    const anyPage = Object.values(pages).some((v) => v !== null);
+    const next = { ...prev, max_pages_per_hour: num('max_pages_per_hour'), max_pages_per_10min: num('max_pages_per_10min') };
+    // 每日页数是一整组：填了任何一格，其余格（含投递 / 监测）沿用原来的单独值，没有就用全局值
+    next.daily_pages = anyPage ? {
+      ...gp, ...(prev.daily_pages || {}),
+      ...Object.fromEntries(Object.entries(pages).map(([k, v]) => [k, v ?? ((prev.daily_pages || {})[k] ?? gp[k])])),
+    } : null;
+    all[key] = next;
+    payload.safety = { ...(payload.safety || {}), platforms: all };
   }
   const res = await post('/api/config', payload);
   if (res.error) {

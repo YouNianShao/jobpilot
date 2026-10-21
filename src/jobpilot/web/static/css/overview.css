@@ -188,3 +188,17 @@
 .pending-card.is-flash { animation: q-flash 1.2s var(--ease); }
 @keyframes q-flash { 0%, 100% { box-shadow: var(--shadow-2), var(--hairline); } 25% { box-shadow: 0 0 0 2px var(--accent), 0 0 24px -4px var(--accent); } }
 @media (prefers-reduced-motion: reduce) { .pending-card.is-flash { animation: none; outline: 2px solid var(--accent); } }
+
+/* 2026-10-21 修：展开的平台带了警告条（降速 / 冷却 / 要验证）时，它按比例分到的高度不够，
+   明细溢出、压到下面那一行上（截图里猎聘明细盖住了智联）。改成：展开的那块按内容长、不许被压；
+   收起的几行平分剩下的高度、最少一行高；还放不下就整个风控卡片内滚动，永远不重叠 */
+@media (min-width: 1600px) and (min-height: 820px) {
+  .ov #risk > .rtiles > .racc { flex: 1 1 0; min-height: 34px; }
+  .ov #risk > .rtiles > .racc.is-open { flex: 0 0 auto; min-height: 0; }
+  .ov #risk > .rtiles > .racc.is-open > .rdet { flex: none; }
+  .ov #risk { overflow-y: auto; overscroll-behavior: contain; }
+  /* 有警告条时明细先藏说明文字，省出两三行 */
+  .ov .racc.is-open:has(> .rtile > .lock) > .rdet > .rdet-intro { display: none; }
+  .ov .racc.is-open:has(> .rtile > .lock) > .rdet { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+}
+.racc.is-open > .rtile > .lock { margin: 2px 0; }

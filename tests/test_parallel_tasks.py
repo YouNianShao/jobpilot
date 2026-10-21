@@ -140,6 +140,10 @@ def test_apply_all_claims_every_apply_capable_platform(rig, monkeypatch):
         return {}
 
     monkeypatch.setattr(tasks_module, "run_flow", slow_flow)
+    runner_seed = rig[2]
+    for key in KEYS:                                  # 每个平台都有已确认、等着投的岗位
+        runner_seed.upsert_job(Job(id=f"{key}-a1", platform=key, external_id="a1", title=f"{key} 岗", company=f"{key} 公司"))
+        runner_seed.set_status(f"{key}-a1", Status.APPROVED.value)
     task = runner.start("apply", "")
     assert entered.wait(3)
     assert runner.running_platforms() == set(KEYS)
@@ -372,3 +376,39 @@ def test_scoring_one_platform_runs_alongside_collect_and_apply_and_other_scores(
     wait_all(runner)
     assert all(runner.get(t.id).status == "completed" for t in started)
 
+
+
+def test_apply_all_skips_platform_busy_with_another_task(rig, monkeypatch):
+    """2026-10-21：智联在采集时点「开始投递」被整个拒绝（要投的岗位并不在智联）。
+    现在只占有已确认岗位、此刻空闲的平台；被占着的跳过并写进日志；都被占着才拒绝"""
+    import jobpilot.tasks as tasks_module
+
+    runner, drivers, seed, _ = rig
+    busy, other = KEYS[0], KEYS[1]
+    for key in (busy, other):
+        seed.upsert_job(Job(id=f"{key}-a1", platform=key, external_id="a1", title=f"{key} 岗", company=f"{key} 公司"))
+        seed.set_status(f"{key}-a1", Status.APPROVED.value)
+    hold(runner, drivers, busy)                       # 这个平台在采集
+    seen = {}
+    real = tasks_module.run_flow
+
+    def spy(ctx, mode, platform=None, **options):
+        if mode == "apply":
+            seen["platforms"] = options.get("platforms")
+            return {}
+        return real(ctx, mode, platform, **options)
+
+    monkeypatch.setattr(tasks_module, "run_flow", spy)
+    task = runner.start("apply", "")
+    assert set(task.options["platforms"]) == {other}
+    assert busy not in runner._claims[task.id]
+    assert any("先不投" in line for line in task.logs)
+    # 只有被占着的平台有已确认岗位 → 拒绝，并说清是哪个平台在忙
+    seed.set_status(f"{other}-a1", Status.APPLIED.value)
+    while runner.get(task.id).status == "running":
+        time.sleep(0.02)
+    with pytest.raises(TaskAlreadyRunning):
+        runner.start("apply", "")
+    drivers[busy].release.set()
+    wait_all(runner)
+    assert seen["platforms"] == [other]

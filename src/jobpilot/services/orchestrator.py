@@ -94,7 +94,8 @@ def run(ctx: ServiceContext, mode: str, platform: str | None = None, *, registry
         problem = check_mode(ctx.config, "apply", None, registry=registry)
         if problem:
             return {"error": problem, "mode": mode, "platform": "all"}
-        return applier.apply_all(ctx, registry=registry, limit=options.get("limit"))
+        # platforms：任务开始时排除了正被别的任务占着的平台（见 TaskRunner.start）；不传 = 所有平台
+        return applier.apply_all(ctx, registry=registry, limit=options.get("limit"), platforms=options.get("platforms"))
 
     if mode == "full" and options.get("plans") is not None:
         # 多平台全流程：勾选的平台依次采集（每个平台这一次的搜索条件在 plans 里）
