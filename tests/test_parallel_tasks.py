@@ -412,3 +412,41 @@ def test_apply_all_skips_platform_busy_with_another_task(rig, monkeypatch):
     drivers[busy].release.set()
     wait_all(runner)
     assert seen["platforms"] == [other]
+
+
+def test_score_all_skips_platform_already_scoring(rig, monkeypatch):
+    """一键评分（2026-10-21）：只占有待评分、此刻没在评的平台；正在评的跳过；全在评才拒绝"""
+    import jobpilot.tasks as tasks_module
+
+    runner, _, seed, _ = rig
+    a, b = KEYS[0], KEYS[1]
+    for key in (a, b):
+        seed.upsert_job(Job(id=f"{key}-n1", platform=key, external_id="n1", title=f"{key} 新岗", company=f"{key} 新公司"))
+    gate, entered = threading.Event(), threading.Event()
+    seen = {}
+
+    def flow(ctx, mode, platform=None, **options):
+        if platform == a:                               # a 平台的评分卡住，模拟「正在评」
+            entered.set()
+            while not gate.is_set():
+                ctx.stop.check()
+                time.sleep(0.01)
+            return {}
+        seen["platforms"] = options.get("platforms")
+        return {}
+
+    monkeypatch.setattr(tasks_module, "run_flow", flow)
+    runner.start("score", a)
+    assert entered.wait(3)
+    task = runner.start("score", "")
+    assert task.options["platforms"] == [b]
+    assert any("先不评" in line for line in task.logs)
+    while runner.get(task.id).status == "running":
+        time.sleep(0.02)
+    assert seen["platforms"] == [b]
+    seed.conn.execute("UPDATE jobs SET status='scored' WHERE id=?", (f"{b}-n1",))
+    seed.conn.commit()
+    with pytest.raises(TaskAlreadyRunning):              # 只剩 a 有待评分、而它正在评
+        runner.start("score", "")
+    gate.set()
+    wait_all(runner)

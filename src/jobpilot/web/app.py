@@ -286,6 +286,8 @@ def create_app(ctx_factory: Callable[[], ServiceContext], *, runner: TaskRunner 
                 "pool_total": sum(all_counts.values()),
                 # 每个平台有多少个已确认、待投递：「全部平台轮流投」的确认框里逐个平台写清楚
                 "approved_by_platform": ctx.repo.platform_counts(status=Status.APPROVED.value),
+                # 概览「一键评分」：各平台还有多少待评分（判断按钮能不能点、提示里写哪些平台）
+                "new_by_platform": ctx.repo.platform_counts(status=Status.NEW.value),
                 # 只回概览「待确认」卡片用到的字段：这个接口每 2 秒轮询一次，
                 # 以前把整个岗位（含 JD 正文）都塞进来，2 万岗位的库里一次就是 111KB
                 "pending_confirm": [{key: getattr(job, key) for key in PENDING_FIELDS} for job in pending],

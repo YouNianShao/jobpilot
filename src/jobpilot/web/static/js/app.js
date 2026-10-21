@@ -61,7 +61,12 @@ function renderPipeline(status) {
   const busy = busyPlatforms(status, tasks);
   const legacy = !!status.running && !Array.isArray(status.busy_platforms);
   const busyApply = applyPlatforms().map(([key]) => key).filter((key) => busy.has(key));
+  // 一键评分：所有有待评分岗位的平台都在评分时才不让点（只有部分在评，后端跳过那几个）
+  const scoring = new Set(tasks.filter(taskRunning).flatMap((t) => (t.claims || []).filter((c) => c.startsWith('ai:')).map((c) => c.slice(3))));
+  const freshBy = status.new_by_platform || null;
+  const freshKeys = freshBy ? Object.keys(freshBy).filter((k) => freshBy[k]) : Object.keys(status.platforms || {});
   const blockers = {
+    score: (legacy || (freshKeys.length && freshKeys.every((k) => scoring.has(k)))) ? '待评分的平台都正在评分' : '',
     // 「所有平台轮流投」：有能投的平台在跑就先不让点，简单可预期；提示里写明是哪个
     // 所有平台轮流投：后端会跳过正被占着的平台（2026-10-21），所以只有「能投的平台全都在忙」才不让点
     apply: (legacy || (busyApply.length && busyApply.length === applyPlatforms().length))
@@ -80,7 +85,8 @@ function renderPipeline(status) {
     {
       n: 1, label: '待评分', value: fresh, unit: '个', filter: 'new',
       sub: fresh ? '评分过阈值的进「待确认」，没过的不会被投递' : '没有待评分的岗位',
-      now: !!fresh,
+      // 一键评分（2026-10-21）：所有平台的待评分一起评，不用在顶栏一个个切平台；正在评分的平台后端会跳过
+      action: fresh ? ['一键评分', () => runTask('score', { all: true })] : null, now: !!fresh, block: blockers.score,
     },
     {
       n: 2, label: '待确认', value: pending, unit: '个', filter: 'pending_confirm',

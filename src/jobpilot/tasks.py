@@ -333,6 +333,21 @@ class TaskRunner:
                     refuse(TaskNotRunnable("没有已确认、等着投的岗位"))
                 options = {**options, "platforms": usable}
                 claims = frozenset(usable)
+            if mode == "score" and not platform and options.get("platforms") is None:
+                # 「一键评分」（2026-10-21）：所有平台的待评分一起评。只占有待评分岗位、此刻没在评的平台的评分位；
+                # 某个平台正在评（例如它的全流程跑到了评分）就跳过它，不让整个一键评分被拒
+                busy = set()
+                for tid in self._running_ids():
+                    busy |= set(self._claims.get(tid, frozenset()))
+                waiting = [key for key in registry.keys() if ctx.repo.list_jobs(platform=key, status="new", limit=1)]
+                skipped_busy = [key for key in waiting if ai_claim(key) in busy]
+                usable = [key for key in waiting if ai_claim(key) not in busy]
+                if not usable and skipped_busy:
+                    names = "、".join(readable.platform_name(k) for k in skipped_busy)
+                    refuse(TaskAlreadyRunning(f"有待评分岗位的平台（{names}）正在评分，等它结束再评"))
+                if usable:                    # 一个待评分都没有：照旧跑一遍（结果写「没有待评分的岗位」），不改占位
+                    options = {**options, "platforms": usable}
+                    claims = frozenset(ai_claim(k) for k in usable)
             for tid in self._running_ids():
                 clash = claims & self._claims.get(tid, frozenset())
                 if clash:
@@ -355,7 +370,8 @@ class TaskRunner:
             self._order.append(task.id)
             self._forget_old()
             if skipped_busy:
-                task.log("这些平台正在跑别的任务，这次先不投（等它们结束再投一次）："
+                task.log(("这些平台正在评分，这次先不评（等它们结束再评一次）：" if mode == "score" else
+                          "这些平台正在跑别的任务，这次先不投（等它们结束再投一次）：")
                          + "、".join(readable.platform_name(k) for k in skipped_busy))
             self._persist(ctx, task)
             thread = threading.Thread(target=self._work, args=(ctx, task), daemon=True)

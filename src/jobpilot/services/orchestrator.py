@@ -86,6 +86,10 @@ def run(ctx: ServiceContext, mode: str, platform: str | None = None, *, registry
     # 评分 / 招呼语不开页面，不该被顶栏选的平台卡住：以前选着 BOSS 点评分，
     # 前程无忧刚采的 20 个岗位就一直不动（用户以为是 bug）。不传平台 = 全部平台。
     if mode == "score" and not platform:
+        if options.get("platforms"):
+            # 一键评分：任务开始时排除了正在评分的平台（见 TaskRunner.start），逐个平台评，结果合成一份
+            return _per_platform(ctx, list(options["platforms"]), scorer.score_jobs, options.get("limit"),
+                                 ("scored", "prefiltered", "failed", "total"))
         return scorer.score_jobs(ctx, None, limit=options.get("limit"))
     if mode == "greet" and not platform:
         return greeter.greet_jobs(ctx, None, limit=options.get("limit"))
