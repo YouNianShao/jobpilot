@@ -110,6 +110,13 @@ def make_job_id(raw: dict) -> str:
     return "51job-" + hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
 
 
+def _job_label(item: dict) -> str:
+    """日志里写「岗位名@公司」，任务监控台一眼看出在抓哪个岗位（以前写整串链接，只能截成一串编号）。"""
+    title = str(item.get("title") or "").strip()
+    company = str(item.get("company") or "").strip()
+    return f"{title}@{company}" if title and company else title or company
+
+
 class Job51Driver:
     key = "51job"
     name = "前程无忧"
@@ -173,7 +180,7 @@ class Job51Driver:
                 jd = ""
                 if cfg.fetch_detail and not detail_exhausted:
                     try:
-                        jd, pages["detail"] = self._fetch_jd(ctx, pages["detail"], item.get("url", ""))
+                        jd, pages["detail"] = self._fetch_jd(ctx, pages["detail"], item.get("url", ""), _job_label(item))
                     except Denied as exc:
                         if exc.kind in {"budget", "rate"}:
                             detail_exhausted = True
@@ -212,12 +219,12 @@ class Job51Driver:
                               + "（51job 目前只内置 15 个城市）")
         return result
 
-    def _fetch_jd(self, ctx: DriverContext, page, url: str) -> tuple[str, object]:
+    def _fetch_jd(self, ctx: DriverContext, page, url: str, label: str = "") -> tuple[str, object]:
         """打开详情页读 JD；返回 (jd, page)。预算不足时抛 Denied，由调用方决定是否继续。"""
         if not url:
             return "", page
         ctx.reserve("collect_detail")
-        ctx.log(f"[51job] 抓 JD 详情页：{url}")
+        ctx.log(f"[51job] 抓 JD 详情页：{label or url}")
         if page is None:
             page = ctx.browser.open(url)
         else:

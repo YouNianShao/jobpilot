@@ -139,6 +139,13 @@ def make_job_id(raw: dict) -> str:
     return "zhaopin-" + hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
 
 
+def _job_label(item: dict) -> str:
+    """日志里写「岗位名@公司」，任务监控台一眼看出在抓哪个岗位（以前写整串链接，只能截成一串编号）。"""
+    title = str(item.get("title") or "").strip()
+    company = str(item.get("company") or "").strip()
+    return f"{title}@{company}" if title and company else title or company
+
+
 class ZhaopinDriver:
     key = "zhaopin"
     name = "智联招聘"
@@ -222,7 +229,7 @@ class ZhaopinDriver:
                             jd = " ".join(str(t) for t in tags)
                             if cfg.fetch_detail and job_url and not detail_exhausted:
                                 try:
-                                    jd, detail_page = self._fetch_jd(ctx, detail_page, job_url)
+                                    jd, detail_page = self._fetch_jd(ctx, detail_page, job_url, _job_label(item))
                                 except Denied as exc:
                                     if exc.kind in {"budget", "rate"}:
                                         detail_exhausted = True
@@ -278,12 +285,12 @@ class ZhaopinDriver:
                 return current
         return current
 
-    def _fetch_jd(self, ctx: DriverContext, page, url: str) -> tuple[str, object]:
+    def _fetch_jd(self, ctx: DriverContext, page, url: str, label: str = "") -> tuple[str, object]:
         """打开详情页读 JD（选择器含智联自己的拼写 describtion）；预算不足时抛 Denied。"""
         if not url:
             return "", page
         ctx.reserve("collect_detail")
-        ctx.log(f"[zhaopin] 抓 JD 详情页：{url}")
+        ctx.log(f"[zhaopin] 抓 JD 详情页：{label or url}")
         if page is None:
             page = ctx.browser.open(url)
         else:
