@@ -202,3 +202,16 @@
   .ov .racc.is-open:has(> .rtile > .lock) > .rdet { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
 }
 .racc.is-open > .rtile > .lock { margin: 2px 0; }
+
+/* 流水线三个按钮（2026-10-22 统一）：同高同宽、图标在前；▶ = 开始一个任务，→ = 切过去看。
+   只有「下一步」实心，其余描边；在跑 / 被挡住时原因写在说明行，不用悬停去找 */
+.ov .pipe > .pipe-btn { min-width: 112px; height: 32px; justify-content: center; gap: 6px; padding: 0 14px; }
+.pipe-btn .ico { width: 13px; height: 13px; }
+.pipe-btn .pipe-go { margin-left: 2px; margin-right: -2px; }
+.pipe-btn.is-busy { cursor: progress; opacity: 1; }
+.pipe-btn .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+  animation: pipe-spin .8s linear infinite; }
+@keyframes pipe-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pipe-btn .spin { animation: none; } }
+.ov .pipe-sub.is-blocked { color: var(--warn); }
+.ov .pipe-sub.is-running { color: var(--accent); }

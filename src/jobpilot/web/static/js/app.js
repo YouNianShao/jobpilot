@@ -65,12 +65,23 @@ function renderPipeline(status) {
   const scoring = new Set(tasks.filter(taskRunning).flatMap((t) => (t.claims || []).filter((c) => c.startsWith('ai:')).map((c) => c.slice(3))));
   const freshBy = status.new_by_platform || null;
   const freshKeys = freshBy ? Object.keys(freshBy).filter((k) => freshBy[k]) : Object.keys(status.platforms || {});
+  // 某个平台此刻在跑什么（「智联招聘正在采集」），给被挡住的按钮写原因
+  const doing = (key) => {
+    const t = tasks.find((x) => taskRunning(x) && (x.claims || []).includes(key));
+    return t ? platformName(key) + '正在' + (modeName(t.mode) || '跑任务').replace(/^运行/, '') : platformName(key) + '正在跑任务';
+  };
   const blockers = {
-    score: (legacy || (freshKeys.length && freshKeys.every((k) => scoring.has(k)))) ? '待评分的平台都正在评分' : '',
-    // 「所有平台轮流投」：有能投的平台在跑就先不让点，简单可预期；提示里写明是哪个
+    score: (legacy || (freshKeys.length && freshKeys.every((k) => scoring.has(k)))) ? '待评分的平台都正在评分，等它们结束' : '',
     // 所有平台轮流投：后端会跳过正被占着的平台（2026-10-21），所以只有「能投的平台全都在忙」才不让点
     apply: (legacy || (busyApply.length && busyApply.length === applyPlatforms().length))
-      ? (busyApply.map(platformName).join('、') || '有任务') + ' 正在跑任务' : '',
+      ? (busyApply.length === 1 ? doing(busyApply[0]) + '，等它结束再投'
+        : busyApply.length ? '能投递的 ' + busyApply.length + ' 个平台都在跑任务，等任一个结束再投' : '有任务在跑，等它结束再投') : '',
+  };
+  // 这一步自己的任务正在跑：按钮变成「评分中…」，说明那行换成进度
+  const runningOf = (mode) => tasks.find((t) => taskRunning(t) && t.mode === mode && !t.platform);
+  const progressText = (t) => {
+    const p = (t && t.progress) || {};
+    return p.total ? '进行中 ' + (p.current || 0) + ' / ' + p.total : '进行中…';
   };
   const applied = status.applied_today ?? 0;
   const limit = status.daily_limit ?? 30;
@@ -86,18 +97,22 @@ function renderPipeline(status) {
       n: 1, label: '待评分', value: fresh, unit: '个', filter: 'new',
       sub: fresh ? '评分过阈值的进「待确认」，没过的不会被投递' : '没有待评分的岗位',
       // 一键评分（2026-10-21）：所有平台的待评分一起评，不用在顶栏一个个切平台；正在评分的平台后端会跳过
-      action: fresh ? ['一键评分', () => runTask('score', { all: true })] : null, now: !!fresh, block: blockers.score,
+      action: fresh ? { text: '开始评分', kind: 'run', onclick: () => runTask('score', { all: true }),
+        title: '所有平台的待评分一起评（正在评分的平台会跳过）', running: runningOf('score'), busyText: '评分中' } : null,
+      now: !!fresh, block: blockers.score,
     },
     {
       n: 2, label: '待确认', value: pending, unit: '个', filter: 'pending_confirm',
       sub: pending ? '你确认之后才会投递，这是最后一道人工闸门' : '没有在等你确认的岗位',
-      action: pending ? ['去确认', () => goConfirm()] : null,
+      action: pending ? { text: '去确认', kind: 'go', onclick: () => goConfirm(), title: '切到投递队列的「待确认」，一个个看过再确认' } : null,
       now: !!pending && !fresh, local: true,
     },
     {
       n: 3, label: '已确认待投', value: approved, unit: '个', filter: 'approved',
       sub: approved ? '在能自动投递的平台里轮流投' : '没有已确认、等着投的岗位',
-      action: approved ? ['投递', () => runTask('apply', { all: true })] : null, now: !!approved && !pending && !fresh,
+      action: approved ? { text: '开始投递', kind: 'run', onclick: () => runTask('apply', { all: true }),
+        title: '在能自动投递的平台里轮流投（点了会先让你确认，发出后撤不回）', running: runningOf('apply'), busyText: '投递中' } : null,
+      now: !!approved && !pending && !fresh,
       block: blockers.apply,
     },
     {
@@ -113,12 +128,20 @@ function renderPipeline(status) {
       onclick: () => { switchView('jobs'); setStatusFilter(step.filter); },
     }, [String(step.value), el('span', { class: 'unit', text: step.unit })]));
     if (step.pct !== undefined) card.appendChild(meter(step.pct, step.pct >= 85 ? 'bad' : (step.pct >= 60 ? 'warn' : 'ok')));
-    card.appendChild(el('div', { class: 'pipe-sub', text: step.sub }));
-    if (step.action) {
-      card.appendChild(el('button', {
-        class: 'btn small' + (step.now ? ' primary' : ''), type: 'button', text: step.action[0],
-        disabled: !!step.block, title: step.block || null, onclick: step.action[1],
-      }));
+    const act = step.action;
+    const running = act && act.running;
+    const blocked = act && !running && step.block;
+    // 说明行：在跑写进度，被挡住写原因（以前原因只藏在按钮的悬停提示里）
+    card.appendChild(el('div', { class: 'pipe-sub' + (blocked ? ' is-blocked' : '') + (running ? ' is-running' : ''),
+      text: running ? progressText(running) : (blocked || step.sub) }));
+    if (act) {
+      const btn = el('button', {
+        class: 'btn small pipe-btn' + (step.now && !blocked ? ' primary' : '') + (running ? ' is-busy' : ''), type: 'button',
+        disabled: !!(blocked || running), title: blocked || act.title || null, onclick: act.onclick,
+        'aria-label': running ? act.busyText + '…' : act.text,
+      }, running ? [el('span', { class: 'spin', 'aria-hidden': 'true' }), act.busyText + '…']
+        : act.kind === 'run' ? [icon('play'), act.text] : [act.text, icon('chev', 'pipe-go')]);
+      card.appendChild(btn);
     }
     box.appendChild(card);
   }
