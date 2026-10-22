@@ -197,7 +197,7 @@ class LiepinDriver:
             page.goto(url)
         if not page.wait_for(".job-intro-container", timeout_ms=30000):
             stop_if_risky(page, "[liepin] 详情页")      # 是验证码 / 访问频繁就停手，不是才跳过这一个
-            ctx.log(f"[liepin] 详情页没等到 JD 容器，已跳过：{url}")
+            ctx.log(f"[liepin] 详情页没等到 JD 容器，已跳过：{label or url}")
             return "", page
         # 容器先出现、正文后渲染的情况很常见：轮询直到拿到非空文本，避免白花一次开页额度
         for _ in range(6):
@@ -208,7 +208,7 @@ class LiepinDriver:
                 return text, page
             ctx.stop.sleep(1.5)
         stop_if_risky(page, "[liepin] 详情页")
-        ctx.log(f"[liepin] 详情页 JD 容器为空，已跳过：{url}")
+        ctx.log(f"[liepin] 详情页 JD 容器为空，已跳过：{label or url}")
         return "", page
 
     def probe_apply(self, ctx: DriverContext, job: Job) -> dict:
