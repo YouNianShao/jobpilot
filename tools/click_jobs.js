@@ -1,1 +1,0 @@
-(function(){ const b=document.querySelector('[data-view="jobs"]'); if(b) b.click(); return 'clicked jobs'; })()
